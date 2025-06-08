@@ -11,10 +11,9 @@ authors = [
 description = "A GUI application for simulating sodium channel models, showcasing CTBN's advantages over the Legacy Hodgkin-Huxley and Markov model." 
 readme = "README.md"
 requires-python = ">=3.8"
-license = { file="LICENSE" }
+license = "MIT"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Development Status :: 4 - Beta", 
     "Intended Audience :: Science/Research",
