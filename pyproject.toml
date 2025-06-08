@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "CTBN-Voltage-Gated"
+version = "0.1.0"
+authors = [
+  { name="Hannah Wimpy", email="Hannah_Wimpy@hms.harvard.edu" },
+]
+description = "A GUI application for simulating sodium channel models, showcasing CTBN's advantages over the Legacy Hodgkin-Huxley and Markov model." 
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file="LICENSE" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Development Status :: 4 - Beta", 
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy>=1.20.0",
+    "scipy>=1.7.0",
+    "dearpygui>=1.0.0",
+    "pandas>=1.3.0",
+    "matplotlib>=3.4.0",
+    "pyobjc>=8.0; sys_platform == 'darwin'",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/hannahgwimpy/CTBN-Voltage-Gated"
+"Bug Tracker" = "https://github.com/hannahgwimpy/CTBN-Voltage-Gated/issues" 
+
+[project.scripts]
+CTBN-Voltage-Gated = "src.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -3,7 +3,63 @@ from scipy.integrate import solve_ivp
 
 
 class MarkovModel:
+    """
+    Implements a traditional Markov model for simulating ion channel currents,
+    specifically sodium channels. This version is considered "legacy."
+
+    The model defines a set of 13 discrete states representing different
+    conformations of the ion channel (e.g., closed, open, inactivated).
+    Transitions between these states are governed by voltage-dependent rate
+    constants. The model simulates the time evolution of the probability
+    distribution across these states in response to a voltage-clamp protocol,
+    using an ODE solver.
+
+    Key Attributes:
+        NumSwps (int): Number of sweeps in the current voltage protocol.
+        num_states (int): Total number of states in the model (fixed at 13).
+        vm (float): Current membrane potential in mV.
+        pop (np.ndarray): A 1D array (size 13) representing the probabilities
+                          of the channel being in each of its states.
+        SwpSeq (np.ndarray): The current voltage clamp protocol sequence.
+        SimSwp (np.ndarray): Stores the simulated current for each time point
+                             of the last run sweep.
+        SimOp (np.ndarray): Stores the probability of the channel being in the
+                            open state (state 6, index 5).
+        SimIn (np.ndarray): Stores the sum of probabilities of the channel
+                            being in any inactivated state (states 7-13, indices 6-12).
+        SimAv (np.ndarray): Stores the sum of probabilities of the channel
+                            being in an available (non-inactivated) state (states 1-6, indices 0-5).
+        SimCom (np.ndarray): Stores the command voltage for each time point.
+        time (np.ndarray): Time vector for the simulation.
+        vt (np.ndarray): A pre-defined array of voltage points (-200mV to 200mV)
+                         for which rates and currents are pre-calculated or looked up.
+        iscft (np.ndarray): Current scaling factor for each voltage in `vt`,
+                            derived from GHK equation.
+        # ... (other biophysical parameters like alcoeff, btslp, etc.)
+
+    The model structure involves:
+    - Initialization of biophysical parameters (`init_parameters`).
+    - Initialization of data structures (`init_waves`, `create_rate_waves`).
+    - Calculation of voltage-dependent transition rates (`stRatesVolt`, `_update_scalar_rates`).
+    - Calculation of current-voltage relationships (`CurrVolt`).
+    - Calculation of equilibrium state occupancies (`EquilOccup`).
+    - Simulation of sweeps using `scipy.integrate.solve_ivp` (`Sweep`, `NowDerivs`).
+    - Creation of default voltage protocols (`create_default_protocol`).
+    """
     def __init__(self):
+        """
+        Initializes the MarkovModel instance.
+
+        Sets up default values for sweep counts, the number of states (13),
+        and the initial membrane potential. It then calls a sequence of
+        helper methods to:
+        - Initialize all biophysical parameters (`init_parameters`).
+        - Initialize data arrays (e.g., for state populations, time series)
+          and pre-calculate voltage-dependent rate arrays (`init_waves`).
+        - Calculate initial voltage-dependent transition rates (`stRatesVolt`).
+        - Calculate initial current-voltage relationships (`CurrVolt`).
+        - Create and set a default voltage-clamp protocol (`create_default_protocol`).
+        """
         self.NumSwps = 0  # Initialize with default
         self.num_states = 13 # Explicitly define the number of states
         
@@ -20,7 +76,17 @@ class MarkovModel:
         self.create_default_protocol()  # Generate protocol on instantiation
     
     def init_parameters(self):
-        """Initialize all model parameters - no matrices needed"""
+        """
+        Initializes the biophysical parameters of the legacy Markov model.
+
+        These parameters define the voltage-dependent kinetics of channel
+        activation, inactivation, and transitions between the 13 defined states.
+        Includes coefficients and slope factors for rate equations (e.g.,
+        `alcoeff`, `alslp`), physical constants (`F`, `Rgc`, `Tkel`), ion
+        concentrations (`Nao`, `Nai`), and other model-specific values like
+        `PNasc` (sodium permeability) and `current_scaling`.
+        """
+
         # Activation parameters
         self.alcoeff = 150      
         self.alslp = 20           
@@ -80,6 +146,22 @@ class MarkovModel:
         self._reusable_y0 = np.zeros(12)  # For ODE initial conditions - 12 states as used in NowDerivs
     
     def init_waves(self):
+        """
+        Initializes data arrays for simulation and pre-calculated values.
+
+        This method sets up:
+        - `vt`: A numpy array of voltage points from -200mV to 200mV.
+        - `pop`: A numpy array (size 13) to store the probability of the channel
+                 being in each of its 13 states.
+        - `dstdt`: A numpy array (size 12) to store derivatives of the first 12
+                   state probabilities for the ODE solver.
+        - `_reusable_y0`: A numpy array (size 12) for ODE initial conditions.
+        - `iscft`: An array to store GHK-derived current scaling factors for each
+                   voltage in `vt`.
+
+        Calls `create_rate_waves()` to initialize arrays for storing
+        voltage-dependent transition rates and `stRatesVolt()` to populate them.
+        """
         self.vt = np.arange(-200, 201)
         
         # Create state array with 13 elements (indices 0-12) to match NowDerivs
@@ -99,7 +181,15 @@ class MarkovModel:
         self.stRatesVolt()  # Initialize rate constants
 
     def create_rate_waves(self):
-        """Create vectorized rate storage arrays"""
+        """
+        Creates numpy arrays to store pre-calculated voltage-dependent transition rates.
+
+        For each defined transition rate in the model (e.g., 'k12dis', 'k23dis'),
+        this method initializes a corresponding numpy array (e.g., `self.k12dis_vec`)
+        with the same size as `self.vt`. These arrays will be populated by
+        `stRatesVolt` with the rate values at each voltage in `self.vt`.
+        """
+
         rate_names = ['k12dis', 'k23dis', 'k34dis', 'k45dis', 'k56dis',
                      'k65dis', 'k54dis', 'k43dis', 'k32dis', 'k21dis',
                      'k17dis', 'k71dis', 'k28dis', 'k82dis', 'k39dis',
@@ -113,7 +203,23 @@ class MarkovModel:
             setattr(self, name + '_vec', np.zeros_like(self.vt, dtype=float))
     
     def stRatesVolt(self):
-        """Calculate voltage-dependent state transition rates - fully vectorized"""
+        """
+        Calculates and stores all voltage-dependent state transition rates.
+
+        This method computes the rates for all defined transitions in the
+        13-state Markov model across the pre-defined voltage range `self.vt`.
+        It uses various biophysical parameters (e.g., `alcoeff`, `btslp`,
+        `ConCoeff`) to calculate rates like alpha/beta for activation,
+        kon/koff for inactivation, and other inter-state transition rates.
+
+        The calculated rates for each transition (e.g., k12dis, k21dis) are
+        stored in their respective vectorized arrays (e.g., `self.k12dis_vec`,
+        `self.k21dis_vec`) for efficient lookup during simulations.
+        It also calls `_update_scalar_rates()` to set the scalar rate attributes
+        (e.g., `self.k12dis`) based on the current `self.vm`.
+        Rates are clipped to `self.ClipRate` if they exceed it.
+        """
+
         # Set default ClipRate if not present
         if not hasattr(self, 'ClipRate') or self.ClipRate is None:
             self.ClipRate = 1000
@@ -200,7 +306,18 @@ class MarkovModel:
         self._update_scalar_rates()
 
     def _update_scalar_rates(self):
-        """Update scalar rate constants for current vm from vectorized arrays"""
+        """
+        Updates scalar rate attributes based on the current membrane potential `self.vm`.
+
+        This helper method finds the closest voltage index in `self.vt` to
+        the current `self.vm`. It then uses this index to look up the
+        pre-calculated vectorized rates (e.g., `self.k12dis_vec`) and assigns
+        them to their corresponding scalar attributes (e.g., `self.k12dis`).
+
+        These scalar rates are used by `NowDerivs` and `EquilOccup` for
+        constructing the transition matrix at a specific `self.vm`.
+        """
+
         # Find the closest voltage index
         vidx = np.argmin(np.abs(self.vt - self.vm))
         
@@ -227,7 +344,21 @@ class MarkovModel:
                 setattr(self, name, 0.0)
 
     def CurrVolt(self):
-        """Calculate voltage-dependent sodium currents using Goldman-Hodgkin-Katz equation - fully vectorized"""
+        """
+        Calculates the current-voltage (I-V) relationship for the open state.
+
+        This method computes the single-channel current (`iscft`) for each
+        voltage in the `self.vt` array using the Goldman-Hodgkin-Katz (GHK)
+        current equation. It considers sodium ion concentrations (`Nao`, `Nai`),
+        permeability (`PNasc`), temperature (`Tkel`), and physical constants.
+
+        The results are stored in `self.iscft`. This array is used as a scaling
+        factor during simulations (`_store_results`, `_store_results_vectorized`)
+        to calculate the total macroscopic current based on the probability of
+        the channel being in the open state (state 6, index 5).
+        Handles potential division by zero if vm is exactly 0 mV.
+        """
+
         # Set temperature in Kelvin to fixed reference value (22°C)
         self.Tkel = 273.15 + 22.0
         
@@ -258,7 +389,29 @@ class MarkovModel:
             self.iscft[not_zero] = scaled_PNasc * du5_corrected
 
     def EquilOccup(self, vm):
-        """Calculate equilibrium occupancy for a given voltage - vectorized"""
+        """
+        Calculates the equilibrium state occupancies at a given membrane potential.
+
+        This method determines the steady-state probabilities for each of the
+        13 states of the Markov model at the specified voltage `vm`.
+        It first updates the scalar transition rates based on `vm` using
+        `_update_scalar_rates()`. Then, it constructs the transition rate
+        matrix (Q matrix) and solves the system dP/dt = Q * P = 0, subject to
+        sum(P) = 1, to find the equilibrium probabilities.
+
+        The calculation involves solving a system of linear equations derived
+        from the rate constants. A `safe_div` helper function is used to
+        prevent division by zero errors during these calculations.
+
+        Args:
+            vm (float): The membrane potential (in mV) at which to calculate
+                        equilibrium occupancies.
+
+        Returns:
+            np.ndarray: A 1D array of 13 elements representing the equilibrium
+                        probabilities for each state (P1 to P13).
+        """
+
         self.vm = vm
         
         # Ensure rate vectors are created first
@@ -273,7 +426,8 @@ class MarkovModel:
         
         # Safe division function to prevent NaN values
         def safe_div(a, b, default=0.0):
-            """Safe division that handles zero denominators without evaluation errors"""
+            """Safely divides a by b, returning default if b is zero."""
+
             if np.isscalar(b):
                 if abs(b) > 1e-10:
                     return a / b
@@ -337,6 +491,32 @@ class MarkovModel:
         return pop
 
     def NowDerivs(self, t, y):
+        """
+        Calculates the derivatives of state probabilities for the ODE solver.
+
+        This function is used by `scipy.integrate.solve_ivp` during the
+        simulation of a voltage sweep. It computes dP/dt for each of the first
+        12 states (P1 to P12), based on the current state probabilities `y`
+        and the scalar transition rates (e.g., `self.k12dis`, `self.k21dis`)
+        which are set by `_update_scalar_rates()` according to `self.vm`.
+
+        The 13th state's probability (P13) is calculated as 1 minus the sum
+        of the first 12 state probabilities, ensuring conservation of probability.
+        The derivatives are defined by the set of differential equations
+        representing the Markov model's state transitions.
+
+        Args:
+            t (float): The current time point in the simulation (not explicitly
+                       used in rate calculation as rates depend on `self.vm`,
+                       which is updated by the `Sweep` method prior to calling
+                       the ODE solver).
+            y (np.ndarray): A 1D array of current state probabilities for the
+                            first 12 states (P1 to P12).
+
+        Returns:
+            np.ndarray: A 1D array representing the derivatives (dP/dt) for
+                        each of the first 12 states.
+        """
         vidx = np.searchsorted(self.vt, self.vm)
         vidx = np.clip(vidx, 0, len(self.vt) - 1)
 
@@ -465,7 +645,37 @@ class MarkovModel:
         return dstdt
 
     def Sweep(self, SwpNo):
-        """Simulate voltage-clamp protocol - vectorized version"""
+        """
+        Runs a single voltage-clamp sweep simulation for the legacy Markov model.
+
+        This method simulates the channel's response to a specific sweep (`SwpNo`)
+        from the current voltage protocol (`self.SwpSeq`). The process involves:
+        1. Setting initial state probabilities (`self.pop`) using `EquilOccup`
+           at the holding potential of the first epoch of the sweep.
+        2. Iterating through each epoch (voltage step) defined in the protocol for the sweep.
+        3. For each epoch:
+            a. Setting `self.vm` to the epoch's voltage.
+            b. Updating scalar transition rates using `_update_scalar_rates()`.
+            c. Using `scipy.integrate.solve_ivp` with `self.NowDerivs` to solve
+               the system of ODEs describing state probability changes over time.
+               The initial conditions for the ODE solver (`y0`) are taken from
+               the first 12 states of `self.pop`.
+            d. Storing the results (current, open probability, etc.) at sampled
+               time points using `_store_results_vectorized`.
+            e. Updating `self.pop` with the final state probabilities from the epoch.
+        4. Populating `self.time` with the time vector for the simulation.
+
+        Args:
+            SwpNo (int): The sweep number (0-indexed) from the `self.SwpSeq`
+                         protocol to simulate.
+
+        Returns:
+            tuple: A tuple containing:
+                - t (np.ndarray): The time points at which the ODE solver evaluated
+                  the solution (may not exactly match `self.time`).
+                - self.SimSwp (np.ndarray): The array of simulated currents for the sweep.
+        """
+
         # Get sweep parameters with bounds checking
         if SwpNo >= self.SwpSeq.shape[1] or SwpNo < 0:
             raise ValueError(f"Invalid sweep number {SwpNo}")
@@ -582,7 +792,24 @@ class MarkovModel:
         return sol.t, self.SimSwp
     
     def _store_results(self, idx, t):
-        """Store results for a single time point"""
+        """
+        Stores the simulation results for a single time point (non-vectorized).
+
+        This method calculates and stores the macroscopic current, open probability,
+        inactivated probability, available probability, and command voltage for a
+        single time point `idx` in the simulation output arrays (e.g., `self.SimSwp`).
+        It uses the current state populations (`self.pop`) and the current
+        membrane potential (`self.vm`) to derive these values. The current is
+        calculated using the open state probability (state 6, index 5), the
+        pre-calculated GHK current factor from `self.iscft`, and scaling factors.
+
+        Args:
+            idx (int): The index in the simulation output arrays where results
+                       for the current time point should be stored.
+            t (float): The current simulation time (not directly used for storage
+                       logic itself but often available when this method is called).
+        """
+
         vidx = np.searchsorted(self.vt, self.vm)
         vidx = np.clip(vidx, 0, len(self.vt) - 1)
         
@@ -598,7 +825,25 @@ class MarkovModel:
         self.SimCom[idx] = self.vm
     
     def _store_results_vectorized(self, indices, batch_states, voltage):
-        """Store results for multiple time points - vectorized"""
+        """
+        Stores a batch of simulation results in their respective arrays (vectorized).
+
+        Calculates and stores currents, open probabilities, inactivated probabilities,
+        available probabilities, and command voltages for a batch of time points.
+        This method is optimized for performance using vectorized numpy operations.
+
+        Args:
+            indices (np.ndarray or list): Array of indices in the output arrays
+                                          (e.g., `self.SimSwp`) where results
+                                          should be stored.
+            batch_states (np.ndarray): A 2D array where each row contains the
+                                       probabilities for the first 12 states
+                                       at a specific time point.
+            voltage (np.ndarray or float): A 1D array of membrane potentials or a
+                                           single float corresponding to each row in
+                                           `batch_states` or for all states if float.
+        """
+
         if len(indices) == 0:
             return
         
@@ -629,9 +874,35 @@ class MarkovModel:
         self.SimAv[indices] = available
         self.SimCom[indices] = voltage
 
-    def create_default_protocol(self, target_voltages=None, holding_potential=-80, 
+    def create_default_protocol(self, target_voltages=None, holding_potential=-80,
                               holding_duration=98, test_duration=200, tail_duration=2):
-        """Create protocol with specified target voltages - vectorized"""
+        """
+        Creates a default multi-step voltage clamp protocol for the legacy Markov model.
+
+        The protocol consists of a holding period, a test pulse to various
+        target voltages, and a tail pulse back to the holding potential. This
+        structure is common for characterizing ion channel kinetics.
+
+        Args:
+            target_voltages (list, optional): A list of voltages (mV) for the
+                test pulse phase. Defaults to [30, 0, -20, -30, -40, -50, -60].
+                The number of sweeps (`self.NumSwps`) will be equal to the
+                number of target voltages.
+            holding_potential (float, optional): Voltage (mV) for the initial
+                holding period and the final tail period. Defaults to -80 mV.
+            holding_duration (float, optional): Duration (ms) of the initial
+                holding period. Defaults to 98 ms.
+            test_duration (float, optional): Duration (ms) of the test pulse.
+                Defaults to 200 ms.
+            tail_duration (float, optional): Duration (ms) of the tail pulse.
+                Defaults to 2 ms.
+
+        This method populates `self.NumSwps` and `self.SwpSeq` (the protocol array).
+        It also stores a copy of the protocol under an attribute named `SwpSeq{self.BsNm}`
+        (where `self.BsNm` is "MultiStepKeyVoltages"). Finally, it calls
+        `self.CurrVolt()` to ensure current-voltage relationships are up to date.
+        """
+
         self.BsNm = "MultiStepKeyVoltages"
         
         # Use default target voltages if none provided

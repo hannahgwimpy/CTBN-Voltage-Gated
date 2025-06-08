@@ -2,15 +2,49 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 class HHModel:
-    """Extended Hodgkin-Huxley model with 4 gates for sodium channels.
-    
-    Uses three separate activation gates (m1, m2, m3) and one inactivation gate (h)
-    to better capture the sequential activation seen in Markov models.
-    
-    Current formula: I_Na = g_Na * m1 * m2 * m3 * h * (V - E_Na)
     """
-    
+    Implements a Hodgkin-Huxley (HH) style model for sodium channel currents.
+
+    This model simulates sodium channel behavior using a set of differential
+    equations for three activation gates (m1, m2, m3) and one inactivation
+    gate (h). The total sodium current is calculated based on the conductances
+    derived from these gates and the Nernst potential, or optionally using the
+    Goldman-Hodgkin-Katz (GHK) current equation.
+
+    Key Attributes:
+        g_Na (float): Maximum sodium conductance (mS/cm²).
+        E_Na (float): Sodium reversal potential (mV), used if GHK is not.
+        C_m (float): Membrane capacitance (μF/cm²).
+        V_rest (float): Resting membrane potential (mV).
+        sampint (float): Sampling interval for simulations (ms).
+        numchan (int): Number of channels (primarily for scaling, not stochasticity).
+        Na_in, Na_out (float): Intracellular and extracellular sodium concentrations (mM) for GHK.
+        m1, m2, m3, h (float): Current values of the gating variables.
+        v_range (np.ndarray): Voltage range for pre-calculating rate constants.
+        alpha_m1_vec, beta_m1_vec, etc. (np.ndarray): Pre-calculated voltage-dependent
+                                                     rate constants for each gate.
+        iscft (np.ndarray): Pre-calculated GHK current scaling factor across `v_range`.
+        SwpSeq (np.ndarray): Array defining the voltage-clamp protocol.
+        NumSwps (int): Number of sweeps in the protocol.
+        SimSwp, SimCom, SimOp (list or np.ndarray): Arrays to store simulation
+                                                    results (current, command voltage,
+                                                    open probability).
+        time (np.ndarray): Time vector for simulations.
+    """
+
     def __init__(self):
+        """
+        Initializes the Hodgkin-Huxley model parameters and data structures.
+
+        Sets up default biophysical parameters (conductances, reversal potentials,
+        ion concentrations), simulation settings (sampling interval), physical
+        constants, and initializes arrays for storing gating variable rates,
+        simulation results, and the default voltage protocol.
+
+        Calls `initialize_rate_constants()` to pre-calculate voltage-dependent
+        rate constants and GHK current factors.
+        Calls `create_default_protocol()` to set up an initial stimulation protocol.
+        """
         # Conductance and reversal potential
         self.g_Na = 0.12      # Maximum sodium conductance (mS/cm²)
         self.E_Na = 50.0      # Sodium reversal potential (mV)
@@ -63,7 +97,23 @@ class HHModel:
         self.create_default_protocol()
     
     def initialize_rate_constants(self):
-        """Initialize rate constants for all 4 gates"""
+        """
+        Pre-calculates voltage-dependent rate constants for all gating variables.
+
+        This method computes the alpha and beta rate constants for each of the
+        three activation gates (m1, m2, m3) and the inactivation gate (h)
+        across the pre-defined voltage range `self.v_range`. The formulas
+        used are variants of the standard Hodgkin-Huxley rate equations,
+        adjusted to model specific sodium channel kinetics with three distinct
+        activation steps.
+
+        The calculated rates are stored in vectorized numpy arrays (e.g.,
+        `self.alpha_m1_vec`, `self.beta_m1_vec`) for efficient lookup during
+        simulations. It also calls `_compute_ghk_current` to pre-calculate
+        the GHK current scaling factor across `self.v_range`.
+        Handles potential division by zero for specific voltage points by
+        applying L'Hôpital's rule or a limiting value.
+        """
         v = self.v_range
         
         # Gate m1 - fastest activation gate
@@ -98,7 +148,24 @@ class HHModel:
         self.iscft = self._compute_ghk_current(self.v_range)
     
     def _compute_ghk_current(self, V):
-        """Compute GHK current for given voltages"""
+        """
+        Calculates the Goldman-Hodgkin-Katz (GHK) current scaling factor.
+
+        This method computes the GHK current factor for a given voltage or
+        array of voltages `V`. This factor, when multiplied by the open
+        probability and permeability, gives the ionic current. It considers
+        sodium ion concentrations (`self.Nai`, `self.Nao`), temperature
+        (`self.Tkel`), and physical constants.
+
+        Args:
+            V (float or np.ndarray): The membrane potential(s) in mV at which
+                                     to calculate the GHK current factor.
+
+        Returns:
+            np.ndarray: An array of GHK current scaling factors corresponding
+                        to the input voltage(s). Handles the case where V is
+                        close to zero to avoid division by zero.
+        """
         V = np.atleast_1d(V)
         current = np.zeros_like(V, dtype=float)
         
@@ -123,7 +190,21 @@ class HHModel:
         return current
     
     def get_rate_constants(self, V):
-        """Get all rate constants for a given voltage"""
+        """
+        Retrieves pre-calculated rate constants for a given voltage.
+
+        Looks up the alpha and beta values for each gating variable (m1, m2, m3, h)
+        at the specified membrane potential `V` from the pre-calculated vectorized
+        rate arrays (e.g., `self.alpha_m1_vec`). It finds the closest index
+        in `self.v_range` corresponding to `V` for the lookup.
+
+        Args:
+            V (float): The membrane potential (mV) for which to retrieve rates.
+
+        Returns:
+            dict: A dictionary containing the alpha and beta rates for each gate
+                  (e.g., {'alpha_m1': value, 'beta_m1': value, ...}).
+        """
         V = np.atleast_1d(V)
         v_idx = np.searchsorted(self.v_range, V)
         v_idx = np.clip(v_idx, 0, len(self.v_range) - 1)
@@ -140,7 +221,22 @@ class HHModel:
         }
     
     def steady_state_values(self, V):
-        """Calculate steady-state values for all gates"""
+        """
+        Calculates the steady-state activation/inactivation values (m_inf, h_inf) for gates.
+
+        For each gating variable (m1, m2, m3, h), this method computes its
+        steady-state value (e.g., m1_inf) at the given membrane potential `V`.
+        The steady-state value is calculated as alpha / (alpha + beta), using
+        the rate constants obtained from `get_rate_constants(V)`.
+
+        Args:
+            V (float): The membrane potential (mV) at which to calculate
+                       steady-state values.
+
+        Returns:
+            tuple: A tuple containing the steady-state values for m1, m2, m3,
+                   and h, in that order (m1_inf, m2_inf, m3_inf, h_inf).
+        """
         rates = self.get_rate_constants(V)
         
         m1_inf = rates['alpha_m1'] / (rates['alpha_m1'] + rates['beta_m1'])
@@ -151,7 +247,22 @@ class HHModel:
         return m1_inf, m2_inf, m3_inf, h_inf
     
     def time_constants(self, V):
-        """Calculate time constants for all gates"""
+        """
+        Calculates the time constants (tau_m, tau_h) for gating variables.
+
+        For each gating variable (m1, m2, m3, h), this method computes its
+        time constant (e.g., tau_m1) at the given membrane potential `V`.
+        The time constant is calculated as 1 / (alpha + beta), using the
+        rate constants obtained from `get_rate_constants(V)`.
+
+        Args:
+            V (float): The membrane potential (mV) at which to calculate
+                       time constants.
+
+        Returns:
+            tuple: A tuple containing the time constants for m1, m2, m3, and h,
+                   in that order (tau_m1, tau_m2, tau_m3, tau_h).
+        """
         rates = self.get_rate_constants(V)
         
         tau_m1 = 1.0 / (rates['alpha_m1'] + rates['beta_m1'])
@@ -162,7 +273,27 @@ class HHModel:
         return tau_m1, tau_m2, tau_m3, tau_h
     
     def compute_sodium_current(self, V, m1, m2, m3, h):
-        """Compute sodium current using 4-gate model"""
+        """
+        Computes the macroscopic sodium current at a given voltage and gate states.
+
+        The current is calculated using the product of the three activation gates
+        (m1*m2*m3) and the inactivation gate (h), multiplied by the maximum
+        sodium conductance (`self.g_Na`) and the driving force.
+        The driving force can be calculated either as (V - E_Na) or using the
+        pre-calculated GHK current factor (`self.iscft`) if `self.PNasc` > 0,
+        allowing for selection between Ohmic and GHK formulations.
+
+        Args:
+            V (float or np.ndarray): The membrane potential(s) (mV).
+            m1 (float or np.ndarray): Value(s) of the first activation gate.
+            m2 (float or np.ndarray): Value(s) of the second activation gate.
+            m3 (float or np.ndarray): Value(s) of the third activation gate.
+            h (float or np.ndarray): Value(s) of the inactivation gate.
+
+        Returns:
+            float or np.ndarray: The computed sodium current(s) in μA/cm².
+                                 The sign convention is positive for outward current.
+        """
         V = np.atleast_1d(V)
         m1 = np.atleast_1d(m1)
         m2 = np.atleast_1d(m2)
@@ -185,7 +316,34 @@ class HHModel:
         return current
     
     def Sweep(self, sweep_no):
-        """Run simulation for a given sweep"""
+        """
+        Runs a single voltage-clamp sweep simulation for the HH model.
+
+        This method simulates the channel's response to a specific sweep
+        (`sweep_no`) from the current voltage protocol (`self.SwpSeq`).
+        The process involves:
+        1. Setting initial gating variable values (m1, m2, m3, h) to their
+           steady-state values at the holding potential of the first epoch.
+        2. Iterating through each epoch (voltage step) defined in the protocol.
+        3. For each epoch:
+            a. Defining the `derivatives` function for the ODE solver, which
+               calculates dm1/dt, dm2/dt, dm3/dt, and dh/dt based on current
+               voltage and gate values.
+            b. Using `scipy.integrate.solve_ivp` with the `derivatives`
+               function to solve the system of ODEs for the gating variables.
+            c. Storing the results (sodium current, command voltage, open
+               probability) at sampled time points.
+            d. Updating gating variable values for the start of the next epoch.
+        4. Populating `self.time` with the time vector for the simulation.
+
+        Args:
+            sweep_no (int): The sweep number (0-indexed) from `self.SwpSeq`
+                            to simulate.
+
+        Returns:
+            float: The minimum (most negative) current value observed during the sweep.
+                   This is often used for quick checks of peak inward current.
+        """
         if sweep_no >= self.SwpSeq.shape[1] or sweep_no < 0:
             raise ValueError(f"Invalid sweep number {sweep_no}")
         
@@ -251,6 +409,16 @@ class HHModel:
             
             # Define ODE system for 4 gates
             def derivatives(t, y):
+                """
+                Calculates derivatives of gating variables (dm/dt, dh/dt) for ODE solver.
+
+                Args:
+                    t (float): Current time (not explicitly used as rates are voltage-dependent).
+                    y (np.ndarray): Array of current gating variable values [m1, m2, m3, h].
+
+                Returns:
+                    np.ndarray: Array of derivatives [dm1/dt, dm2/dt, dm3/dt, dh/dt].
+                """
                 m1, m2, m3, h = y.flatten() if hasattr(y, 'flatten') else y
                 dm1dt = rates['alpha_m1'] * (1 - m1) - rates['beta_m1'] * m1
                 dm2dt = rates['alpha_m2'] * (1 - m2) - rates['beta_m2'] * m2
@@ -311,7 +479,33 @@ class HHModel:
         return np.min(self.SimSwp)
     
     def EquilOccup(self, voltage=None):
-        """Calculate equilibrium occupancy (compatible with MarkovModel)"""
+        """
+        Calculates approximate equilibrium occupancies for the HH model.
+
+        This method provides an estimation of state distribution for compatibility
+        with plotting or analysis tools expecting a Markov-like state vector.
+        It uses the steady-state values of the gating variables (m1_inf, m2_inf,
+        m3_inf, h_inf) at the given `voltage` (or `self.vm` if None).
+
+        The "open probability" is calculated as m1_inf * m2_inf * m3_inf * h_inf
+        and placed in a conventional position (index 6) of a 20-element state
+        vector. The "inactivated probability" (1 - h_inf) is distributed
+        among other conventional inactivated state positions (indices 7-12).
+
+        Note: This is not a true equilibrium calculation for a multi-state Markov
+        model but rather a projection of HH gate states onto a simplified scheme.
+
+        Args:
+            voltage (float, optional): The membrane potential (mV) at which to
+                                       calculate equilibrium values. Defaults to
+                                       `self.vm`.
+
+        Returns:
+            np.ndarray: A 1D array of 20 elements, where `pop[6]` represents
+                        the open probability (m1*m2*m3*h) and `pop[7:13]`
+                        represent distributed inactivated probability. Other
+                        elements are zero.
+        """
         V = voltage if voltage is not None else self.vm
         
         m1_inf, m2_inf, m3_inf, h_inf = self.steady_state_values(V)
@@ -330,7 +524,32 @@ class HHModel:
     
     def create_default_protocol(self, target_voltages=None, holding_potential=-80,
                               holding_duration=98, test_duration=200, tail_duration=2):
-        """Create voltage clamp protocol"""
+        """
+        Creates a default multi-step voltage clamp protocol for the HH model.
+
+        The protocol consists of a holding period, a test pulse to various
+        target voltages, and a tail pulse back to the holding potential. This
+        structure is common for characterizing ion channel kinetics.
+
+        Args:
+            target_voltages (list, optional): A list of voltages (mV) for the
+                test pulse phase. Defaults to [30, 0, -20, -30, -40, -50, -60].
+                The number of sweeps (`self.NumSwps`) will be equal to the
+                number of target voltages.
+            holding_potential (float, optional): Voltage (mV) for the initial
+                holding period and the final tail period. Defaults to -80 mV.
+            holding_duration (float, optional): Duration (ms) of the initial
+                holding period. Defaults to 98 ms.
+            test_duration (float, optional): Duration (ms) of the test pulse.
+                Defaults to 200 ms.
+            tail_duration (float, optional): Duration (ms) of the tail pulse.
+                Defaults to 2 ms.
+
+        This method populates `self.NumSwps` and `self.SwpSeq` (the protocol array
+        defining epochs and their durations/voltages). It also initializes
+        `self.SimSwp` and `self.time` arrays based on the total duration of
+        a sweep.
+        """
         if target_voltages is None:
             target_voltages = [30, 0, -20, -30, -40, -50, -60]
         

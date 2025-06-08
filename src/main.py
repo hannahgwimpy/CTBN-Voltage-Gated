@@ -1,9 +1,3 @@
-"""
-Ion Channel GUI Application
-
-A graphical interface for simulating and visualizing ion channel dynamics
-using both Markov state and Hodgkin-Huxley models.
-"""
 
 import dearpygui.dearpygui as dpg
 import numpy as np
@@ -18,14 +12,44 @@ from legacy_markov import MarkovModel
 from legacy_hh import HHModel
 
 class IonChannelGUI:
+    """
+    Manages the main application GUI for simulating and comparing ion channel models.
+
+    This class initializes the DearPyGui context, sets up the different simulation
+    models (CTBN Markov, Legacy Markov, Hodgkin-Huxley), defines their parameters,
+    and builds the user interface for model selection, parameter adjustment,
+    voltage protocol definition, simulation execution, and results visualization.
+
+    Attributes:
+        ctbn_stiff_markov_model (CTBNMarkovModel): Instance of the CTBN Markov model.
+        legacy_markov_model (MarkovModel): Instance of the Legacy Markov model.
+        legacy_hh_model (HHModel): Instance of the Hodgkin-Huxley model.
+        current_model (object): The currently selected simulation model.
+        markov_parameters (list): List of parameter names for Markov-based models.
+        hh_parameters (list): List of parameter names for the Hodgkin-Huxley model.
+        parameter_names (list): List of parameter names for the current_model.
+        markov_parameter_info (dict): Descriptions and bounds for Markov parameters.
+        hh_parameter_info (dict): Descriptions and bounds for HH parameters.
+        parameter_info (dict): Descriptions and bounds for current_model parameters.
+        sim_results (list): Stores results from the latest simulation sweeps.
+        last_saved_plot (str): Path to the last saved plot image.
+    """
     def __init__(self):
+        """
+        Initializes the IonChannelGUI application.
+
+        Sets up the DearPyGui context, initializes the simulation models,
+        defines model parameters and their default values/bounds,
+        configures the main viewport, and calls the GUI setup method.
+        It also attempts to maximize the window, with specific handling for macOS.
+        """
         dpg.create_context()
 
         # Initialize models
-        self.ctbn_stiff_markov_model = CTBNMarkovModel()
+        self.ctbn_markov_model = CTBNMarkovModel()  # Renamed from ctbn_stiff_markov_model
         self.legacy_markov_model = MarkovModel()
         self.legacy_hh_model = HHModel()
-        self.current_model = self.ctbn_stiff_markov_model
+        self.current_model = self.ctbn_markov_model
 
         # Model parameters
         self.markov_parameters = [
@@ -89,7 +113,6 @@ class IonChannelGUI:
         self.parameter_info = self.markov_parameter_info  # Default
 
         self.sim_results = []
-        self.experimental_data = None
         self.spont_ap_results = None
         self.evoked_ap_results = None
 
@@ -98,22 +121,6 @@ class IonChannelGUI:
         self.temp_sim_scaled_data = []
 
         # Create themes for different data types
-        with dpg.theme(tag="exp_data_theme"):
-            with dpg.theme_component(dpg.mvLineSeries):
-                # Red color for experimental data
-                dpg.add_theme_color(dpg.mvPlotCol_Line, [255, 0, 0, 255])
-                dpg.add_theme_style(
-    dpg.mvPlotStyleVar_LineWeight,
-     2.0)    # Thicker line
-                dpg.add_theme_style(
-    dpg.mvPlotStyleVar_Marker,
-     dpg.mvPlotMarker_Circle)  # Circle markers
-                dpg.add_theme_style(
-    dpg.mvPlotStyleVar_MarkerSize,
-     3.0)    # Marker size
-                dpg.add_theme_style(
-    dpg.mvPlotStyleVar_MarkerWeight,
-     1.0)  # Marker outline weight
 
         # Create viewport with specific settings
         dpg.create_viewport(
@@ -148,17 +155,44 @@ class IonChannelGUI:
             dpg.maximize_viewport()
 
     def save_plot_to_file(self, plot_type, plot_data):
-        """Save a plot to a PNG file
+        """
+        Saves the specified plot data to a PNG file in a separate process.
 
-        This method automatically saves plots to the data folder without showing a dialog.
-        It uses matplotlib to create a high-quality version of the plot.
+        This method is designed to auto-save "Current" or "Current Traces" plots.
+        Other plot types (e.g., comparison plots) are expected to be saved
+        via a different mechanism and will be skipped by this method.
 
-        Note: Only 'Current' plot types will be auto-saved. Comparison plots (Channel_Scaling,
-        Time_Scaling, Tissue_Scaling) should be saved explicitly via save_comparison_plots.
+        To avoid potential GUI backend conflicts with Matplotlib, this method
+        works by:
+        1. Creating a temporary directory.
+        2. Serializing the `plot_data` (along with `plot_type` and model
+           information if available) into a JSON file within the temp directory.
+        3. Generating a small Python script (`save_plot.py`) in the temp directory.
+           This script:
+           a. Uses Matplotlib with the 'Agg' non-interactive backend.
+           b. Loads the plot data from the JSON file.
+           c. Determines the save path within the project's 'data/currents'
+              directory, creating it if necessary. The filename is based on
+              `plot_type` and `model_type`.
+           d. Generates the plot using Matplotlib based on `plot_type`:
+              - For "Current Traces": Plots Markov vs. HH currents.
+              - For "Current": Plots multiple current sweeps for a single model,
+                along with the command voltage protocol if available.
+           e. Saves the figure to the determined PNG file path.
+        4. Executes this `save_plot.py` script as a subprocess, passing the
+           path to the JSON data file and the project root directory as arguments.
+        5. Waits for the subprocess to complete and then cleans up the temporary
+           directory and its contents.
+        6. Stores the path of the saved file in `self.last_saved_plot` and
+           displays a success or error message.
 
         Args:
-            plot_type: String indicating the type of plot (e.g., 'Current', 'Channel_Scaling')
-            plot_data: Dictionary containing the plot data
+            plot_type (str): The type of plot to save (e.g., "Current",
+                             "Current Traces").
+            plot_data (dict): A dictionary containing the data required to
+                              reconstruct and save the plot. This typically
+                              includes 'time_points', 'currents', 'voltages',
+                              and 'model_type'.
         """
         # Only auto-save current plots, not comparison plots
         if plot_type != "Current" and plot_type != "Current Traces":
@@ -446,9 +480,7 @@ except Exception as e:
                 else:
                     model_type = 'unknown'
 
-                filename = f"{
-    plot_type.lower().replace(
-        ' ', '_')}_{model_type}.png"
+                filename = f"{plot_type.lower().replace(' ', '_')}_{model_type}.png"
                 plot_path = os.path.join(data_dir, filename)
                 if os.path.exists(plot_path):
                     # Store the path to the most recently saved plot
@@ -466,12 +498,18 @@ except Exception as e:
             traceback.print_exc()
 
     def setup_gui(self):
-        """Create the main GUI layout"""
+        """
+        Creates and arranges the main graphical user interface elements.
+
+        This includes sections for model selection, parameter configuration,
+        voltage protocol definition, control buttons (e.g., "Run Simulation"),
+        and the plotting areas for command voltage and current responses.
+        """
         # Model selection
         with dpg.collapsing_header(label="Model Selection", default_open=True):
             dpg.add_combo(
-            ["CTBN Stiff Markov", "Legacy Markov", "Hodgkin-Huxley"],
-            default_value="CTBN Stiff Markov",
+            ["CTBN Markov", "Legacy Markov", "Hodgkin-Huxley"],
+            default_value="CTBN Markov",
             callback=self.on_model_change,
             width=250,
             tag="model_selector"
@@ -525,7 +563,24 @@ except Exception as e:
                         self.current_series = []
 
     def setup_parameters(self):
-        """Setup parameter controls based on current model"""
+        """
+        Dynamically sets up the GUI input fields for the current model's parameters.
+
+        This method first clears any existing parameter input fields within the
+        'param_group'. It then inspects the type of the `current_model`
+        (CTBNMarkovModel, MarkovModel, or HHModel) and populates the
+        'Model Parameters' section of the GUI with appropriate input fields
+        for each parameter.
+
+        For Markov-based models, it groups parameters into 'Gate Parameters'
+        (e.g., 'alcoeff', 'alslp') and 'Transition Rate Parameters'
+        (e.g., 'ConCoeff'). For the Hodgkin-Huxley model, it lists its
+        specific parameters (e.g., 'g_Na').
+
+        Each input field is configured with its description, default value from the
+        model, bounds, and is linked to the `on_parameter_change` callback
+        to update the model when the user changes a value.
+        """
         if dpg.does_item_exist("param_group"):
             dpg.delete_item("param_group")
 
@@ -615,7 +670,25 @@ except Exception as e:
                     )
 
     def setup_voltage_protocol(self):
-        """Setup voltage protocol controls"""
+        """
+        Sets up the GUI elements for defining the voltage clamp protocol.
+
+        This method clears any existing protocol controls and then creates new
+        input fields for:
+        - Holding potential (mV)
+        - Holding duration (ms)
+        - Test duration (ms)
+        - Tail duration (ms)
+
+        It also initializes a section for defining a series of test voltage steps,
+        starting with a default set of voltages. Users can add or remove voltage
+        steps dynamically.
+
+        Input fields are linked to the `on_protocol_change` callback. Buttons for
+        adding/removing steps and applying the protocol are also created, linked
+        to `add_voltage_step`, `remove_voltage_step`, and
+        `apply_voltage_protocol` respectively.
+        """
         if dpg.does_item_exist("protocol_group"):
             dpg.delete_item("protocol_group")
 
@@ -706,13 +779,31 @@ except Exception as e:
             )
 
     def on_parameter_change(self, sender, value):
-        """Handle parameter value changes"""
+        """
+        Callback function invoked when a model parameter is changed in the GUI.
+
+        It extracts the parameter name from the sender's tag (by removing the
+        'param_' prefix) and updates the corresponding attribute in the
+        `current_model` with the new `value`.
+
+        Args:
+            sender (str or int): The tag of the GUI element that triggered the callback.
+                                 Expected to be in the format 'param_<parameter_name>'.
+            value (float): The new value of the parameter from the input field.
+        """
         param_name = sender.replace("param_", "")
         setattr(self.current_model, param_name, value)
-        # Don't automatically run simulation when parameters change
 
     def add_voltage_step(self):
-        """Add a new voltage step to the protocol"""
+        """
+        Adds a new voltage step input field to the GUI.
+
+        This method determines the number of existing voltage steps, then
+        creates a new integer input field (defaulting to 0 mV) for the next
+        step. The new input field is added to the 'voltage_steps_group'
+        and is linked to the `on_protocol_change` callback. The tag for the
+        new step is stored in `self.voltage_step_tags`.
+        """
         # Get the number of existing steps
         step_num = len(self.voltage_step_tags)
 
@@ -729,7 +820,16 @@ except Exception as e:
             self.voltage_step_tags.append(tag)
 
     def remove_voltage_step(self):
-        """Remove the last voltage step from the protocol"""
+        """
+        Removes the last added voltage step input field from the GUI.
+
+        If there is more than one voltage step present, this method removes
+        the last step's input field (and its associated label group) from the
+        'voltage_steps_group'. It also removes the step's tag from
+        `self.voltage_step_tags`. If only one step remains, it prints a
+        message and does not remove the step, ensuring at least one step is
+        always present.
+        """
         if len(self.voltage_step_tags) > 1:  # Keep at least one step
             # Get the tag of the last step
             tag = self.voltage_step_tags.pop()
@@ -744,11 +844,35 @@ except Exception as e:
             print("Cannot remove the last step")
 
     def on_protocol_change(self, sender, value):
-        """Handle protocol parameter changes"""
+        """
+        Callback function invoked when a voltage protocol parameter changes.
+
+        Currently, this method prints a debug message indicating which protocol
+        parameter was changed and its new value. In a future implementation,
+        this would typically update the internal representation of the voltage
+        protocol.
+
+        Args:
+            sender (str or int): The tag of the GUI element that triggered the
+                                 callback (e.g., 'protocol_holding_potential',
+                                 'voltage_step_0').
+            value (int or float): The new value of the protocol parameter.
+        """
         print(f"Protocol parameter {sender} changed to {value}")
 
     def apply_voltage_protocol(self):
-        """Apply the custom voltage protocol to the model"""
+        """
+        Applies the currently defined voltage protocol to the selected model.
+
+        This method retrieves all protocol parameters (holding potential,
+        holding duration, test duration, tail duration, and all test voltage
+        steps) from their respective GUI input fields. It then calls the
+        `create_default_protocol` method of the `current_model` instance,
+        passing these parameters to configure the model's simulation protocol.
+
+        Finally, it displays a confirmation message summarizing the applied
+        protocol settings.
+        """
         # Get protocol parameters
         holding_potential = dpg.get_value("protocol_holding_potential")
         holding_duration = dpg.get_value("protocol_holding_duration")
@@ -763,7 +887,7 @@ except Exception as e:
 
         # Apply the protocol to the current model
         if isinstance(self.current_model, CTBNMarkovModel):
-            self.current_model.MkSwpSeqMultiStep(
+            self.current_model.create_default_protocol(
                 target_voltages=target_voltages,
                 holding_potential=holding_potential,
                 holding_duration=holding_duration,
@@ -789,7 +913,14 @@ except Exception as e:
         )
 
     def update_plots(self):
-        """Update all plots"""
+        """
+        Refreshes all plots in the GUI, primarily the 'Current Responses' plot.
+
+        This method first calls `_clear_all_plots()` to ensure a clean slate
+        by removing and recreating the plot area. It also explicitly resets
+        `self.current_series` to an empty list. Finally, it calls
+        `update_current_plot()` to draw the new simulation data.
+        """
         # Clear all existing plots and legends
         self._clear_all_plots()
 
@@ -801,8 +932,19 @@ except Exception as e:
         self.update_current_plot()
 
     def _clear_all_plots(self):
-        """Clear all plots and legends to prevent overlapping data"""
+        """
+        Clears and recreates the main 'Current Responses' plot.
 
+        This method attempts to completely delete the existing 'current_plot'
+        and then recreates it with its legend, axes (Time (ms) and Current (pA)),
+        and default axis limits. The `self.current_y_axis` and
+        `self.current_series` attributes are reset.
+
+        If an exception occurs during this process (e.g., if the plot or its
+        parent cannot be found or manipulated as expected), it falls back to
+        calling `_clear_plot_series()` to at least remove the data series
+        from the existing plot.
+        """
         try:
             # Delete and recreate the current plot
             if dpg.does_item_exist("current_plot"):
@@ -822,15 +964,22 @@ except Exception as e:
                     self.current_y_axis = y_axis
                     self.current_series = []
 
-            # Gating plot section removed as requested
         except Exception as e:
             print(f"Error recreating plots: {e}")
             # Fallback to just clearing the series
             self._clear_plot_series()
 
     def _clear_plot_series(self):
-        """Fallback method to clear just the plot series"""
+        """
+        Clears all data series from the 'Current Responses' plot.
 
+        This method iterates through the `self.current_series` attribute,
+        which can be a list of series tags or a single series tag. It attempts
+        to delete each DearPyGui item (plot series) associated with these tags.
+        Any exceptions during deletion (e.g., if a series was already deleted
+        or never existed) are caught and ignored. Finally, `self.current_series`
+        is reset to an empty list.
+        """
         # Clear current plot series
         if hasattr(self, 'current_series'):
             if isinstance(self.current_series, list):
@@ -846,25 +995,34 @@ except Exception as e:
                     pass
             self.current_series = []
 
-        # Clear gating plot series
-        if hasattr(self, 'act_series'):
-            try:
-                dpg.delete_item(self.act_series)
-            except:
-                pass
-            self.act_series = None
-
-        if hasattr(self, 'inact_series'):
-            try:
-                dpg.delete_item(self.inact_series)
-            except:
-                pass
-            self.inact_series = None
-
-    # update_gating_plot method removed as requested
-
     def update_current_plot(self):
-        """Update current traces"""
+        """
+        Updates the 'Current Responses' plot with data from `self.sim_results`.
+
+        This method performs several steps to display the simulation results:
+        1. Resets `self.current_series`.
+        2. Initializes `plot_data` for potential auto-saving.
+        3. Sorts simulation results by step voltage for consistent plot coloring.
+        4. Finds the Y-axis of the 'current_plot'. If not found, it exits.
+        5. Clears any existing line series from the Y-axis and recreates the legend.
+        6. Iterates through the sorted simulation results:
+           a. Extracts time, current, and voltage for each sweep.
+           b. Skips empty results.
+           c. Ensures current data is 1D and time/current arrays have compatible lengths.
+           d. Applies Savitzky-Golay smoothing to the current trace if `use_ctbn`
+              is true (CTBN model) and sufficient data points exist.
+           e. Aligns the peak of the current trace to a target time (98ms) by
+              shifting the time array.
+           f. Ensures the time array starts at 0ms and extends to at least 300ms,
+              padding with the first/last current values if necessary.
+           g. Updates `min_current` and `max_current` for Y-axis auto-scaling.
+           h. Adds the processed time and current data as a new line series to
+              the plot, labeled with the step voltage.
+           i. Stores the time, current, and voltage data in `plot_data`.
+        7. If data was plotted, it attempts to autoscale the Y-axis based on
+           `min_current` and `max_current`, with some padding.
+        8. Stores the `plot_data` in `self.last_plot_data` for saving.
+        """
         # Make sure current_series is empty
         self.current_series = []
 
@@ -1036,9 +1194,7 @@ except Exception as e:
                 if np.any(above_limit):
                     # Apply the limit
                     current[above_limit] = current_limit
-                    print(
-    f"Limited {
-        np.sum(above_limit)} points above {current_limit} pA")
+                    print(f"Limited {np.sum(above_limit)} points above {current_limit} pA")
 
                 # Store processed data for later scaling
                 self.temp_scaled_data.append({
@@ -1048,10 +1204,7 @@ except Exception as e:
                     'original_min': np.min(current)
                 })
             except Exception as e:
-                print(
-    f"Error processing sweep at {
-        res['step_volt']}mV: {
-            str(e)}")
+                print(f"Error processing sweep at {res['step_volt']}mV: {str(e)}")
                 import traceback
                 traceback.print_exc()
 
@@ -1131,11 +1284,7 @@ except Exception as e:
                         parent=current_y_axis
                     )
                     self.current_series.append(series)
-                    print(
-    f"Plotted Markov simulation data for {
-        data['voltage']}mV with {
-            len(
-                data['current'])} points")
+                    print(f"Plotted Markov simulation data for {data['voltage']}mV with {len(data['current'])} points")
 
         # Set y-axis limits based on data, ensuring max depth is visible
         if min_current < 0:
@@ -1151,205 +1300,6 @@ except Exception as e:
             # max_current is very small
             y_max = max(max_current * 1.1, 1.0)
             dpg.set_axis_limits(current_y_axis, y_min, y_max)
-
-        # Initialize processed_exp_data before any conditional blocks
-        processed_exp_data = []
-
-        # Plot experimental data if available
-        if hasattr(self, 'experimental_data') and self.experimental_data:
-            # Use different line style for experimental data
-            for voltage, data in self.experimental_data.items():
-                try:
-                    # Get the time and current data
-                    exp_time = data['time']
-                    exp_current = data['current']
-
-                    # Skip if data is empty
-                    if len(exp_time) == 0 or len(exp_current) == 0:
-                        continue
-
-                    # Ensure arrays are 1D and of compatible length
-                    if isinstance(exp_current,
-                                  np.ndarray) and exp_current.ndim > 1:
-                        exp_current = exp_current.flatten()
-
-                    if len(exp_time) != len(exp_current):
-                        # Adjust time array to match current length if needed
-                        exp_time = np.arange(len(exp_current)) * 0.005
-
-                    # Apply the same processing steps as for simulation data
-
-                    # 1. First align the peak to 98ms
-                    # Find the peak current (minimum for inward currents)
-                    peak_idx = np.argmin(exp_current)
-
-                    # Calculate the time shift needed to align peak to 98ms
-                    current_peak_time = exp_time[peak_idx]
-                    target_peak_time = 98.0  # ms
-                    time_shift = target_peak_time - current_peak_time
-
-                    # Apply the time shift by adjusting the time array
-                    exp_time = exp_time + time_shift
-
-                    # Ensure time array starts at 0ms and extends to at least
-                    # 300ms for proper display
-                    if exp_time[0] > 0:
-                        # Extend time array to start at 0ms
-                        prepend_time = np.array([0])
-                        # Use first value for prepended point
-                        prepend_current = np.array([exp_current[0]])
-                        exp_time = np.concatenate((prepend_time, exp_time))
-                        exp_current = np.concatenate(
-                            (prepend_current, exp_current))
-
-                    if exp_time[-1] < 300:
-                        # Always ensure the time array extends to exactly 300ms
-                        # Find the last time point
-                        last_time = exp_time[-1]
-                        if last_time != 300:
-                            # Create a new time array that goes from the current points to 300ms
-                            # with enough points to ensure a smooth
-                            # continuation
-                            num_extra_points = max(
-                                10, int(len(exp_time) * (300 - last_time) / last_time))
-                            extra_times = np.linspace(last_time, 300, num_extra_points)[
-                                                      1:]  # Skip first point to avoid duplication
-                            extra_currents = np.full_like(
-                                # Use last current value
-                                extra_times, exp_current[-1])
-
-                            # Concatenate with existing arrays
-                            exp_time = np.concatenate((exp_time, extra_times))
-                            exp_current = np.concatenate(
-                                (exp_current, extra_currents))
-                    # 2. Then apply pre-97ms flatlining
-                    # Find the index corresponding to 97ms
-                    idx_97ms = np.argmin(np.abs(exp_time - 97.0))
-
-                    # Get the exact value at 97ms for this sweep
-                    value_at_97ms = exp_current[idx_97ms]
-
-                    # Set all values before 97ms to this value
-                    exp_current[:idx_97ms] = value_at_97ms
-
-                    # 3. Then apply post-105ms flatlining
-                    # Find the index corresponding to 105ms
-                    idx_105ms = np.argmin(np.abs(exp_time - 105.0))
-
-                    # Get the value at exactly 105ms for this sweep
-                    flatline_value = exp_current[idx_105ms]
-
-                    # Set all points after 105ms to this value
-                    exp_current[idx_105ms:] = flatline_value
-
-                    # 4. Finally limit extreme current values above 0.25 pA
-                    current_limit = 0.25  # pA
-
-                    # Find values above the limit
-                    above_limit = exp_current > current_limit
-                    if np.any(above_limit):
-                        # Apply the limit
-                        exp_current[above_limit] = current_limit
-
-                    # Store the original minimum for this sweep
-                    original_minimums = [np.min(exp_current)]
-
-                    # Update the time array in the processed sweep
-                    processed_sweep = {
-                        'time': exp_time,
-                        'current': exp_current,
-                        'voltage': voltage
-                    }
-
-                    # Store the processed sweep
-                    processed_exp_data.append(processed_sweep)
-                except Exception as e:
-                    print(
-    f"Error processing experimental data for {voltage}mV: {
-        str(e)}")
-                    import traceback
-                    traceback.print_exc()
-
-            # 5. Scale all sweeps uniformly to make deepest peak exactly 40000
-            # pA
-            deepest_current = min([data['current'].min(
-            ) for data in processed_exp_data]) if processed_exp_data else 0
-
-            if deepest_current < 0:  # Only scale if there's a negative peak
-                scale_factor = 1.0
-
-                # Track min/max for axis scaling
-                min_current = min(min_current, np.min(data['current']))
-                max_current = max(max_current, np.max(data['current']))
-
-                # Convert to Python lists for DearPyGUI
-                exp_time_list = data['time'].tolist() if isinstance(
-                    data['time'], np.ndarray) else list(data['time'])
-                exp_current_list = data['current'].tolist() if isinstance(
-                    data['current'], np.ndarray) else list(data['current'])
-
-                # Ensure the trace extends to 300ms by explicitly adding a
-                # final point
-                if exp_time_list[-1] < 300:
-                    exp_time_list.append(300)
-                    exp_current_list.append(exp_current_list[-1])
-
-                # Add experimental trace with dashed line style
-                series = dpg.add_line_series(
-                    exp_time_list, exp_current_list,
-                    label=f"Exp {int(data['voltage'])}mV",
-                    parent=current_y_axis
-                )
-
-                # Store series for later reference
-                self.current_series.append(series)
-
-                # Update min/max for axis scaling if needed
-                min_current = min(min_current, np.min(data['current']))
-                max_current = max(max_current, np.max(data['current']))
-        else:
-            # No scaling needed
-            for data in processed_exp_data:
-                # Convert to Python lists for DearPyGUI
-                exp_time_list = data['time'].tolist() if isinstance(
-                    data['time'], np.ndarray) else list(data['time'])
-                exp_current_list = data['current'].tolist() if isinstance(
-                    data['current'], np.ndarray) else list(data['current'])
-
-                # Ensure the trace extends to 300ms by explicitly adding a
-                # final point
-                if exp_time_list[-1] < 300:
-                    exp_time_list.append(300)
-                    exp_current_list.append(exp_current_list[-1])
-
-                # Add experimental trace with dashed line style
-                series = dpg.add_line_series(
-                    exp_time_list, exp_current_list,
-                    label=f"Exp {int(data['voltage'])}mV",
-                    parent=current_y_axis
-                )
-
-                # Store series for later reference
-                self.current_series.append(series)
-                print(
-    f"Plotted processed experimental data for {
-        data['voltage']}mV with {
-            len(
-                data['current'])} points")
-
-                # Update min/max for axis scaling if needed
-                min_current = min(min_current, np.min(data['current']))
-                max_current = max(max_current, np.max(data['current']))
-
-        # Update axis limits to include experimental data
-        if min_current < 0:
-            y_min = min_current * 1.1
-            y_max = max(max_current * 1.1, -min_current * 0.1)
-        else:
-            y_min = 0
-            y_max = max_current * 1.1
-
-        dpg.set_axis_limits(current_y_axis, y_min, y_max)
 
         # Plot command voltage protocol
         if dpg.does_item_exist("command_voltage_plot"):
@@ -1423,31 +1373,39 @@ except Exception as e:
      total_duration]
             volt = [hold, hold, step, step, hold, hold]
             series = dpg.add_line_series(
-    time, volt, parent=y_axis, label=f"Sim {step}")
-
-        # Experimental data (if available)
-        if hasattr(self, 'experimental_data') and self.experimental_data:
-            for idx, (volt_step, data) in enumerate(
-                self.experimental_data.items()):
-                hold = getattr(self, 'loaded_holding_potential', -80)
-                # Protocol: hold, step, tail
-                time = [
-    0,
-    holding_duration,
-    holding_duration,
-    holding_duration +
-    test_duration,
-    holding_duration +
-    test_duration,
-     total_duration]
-                volt = [hold, hold, volt_step, volt_step, hold, hold]
-                series = dpg.add_line_series(
-    time, volt, parent=y_axis, label=f"Exp {volt_step}")
-
-
+                time, volt, parent=y_axis, label=f"Sim {step}")
 
     def run_simulation(self):
-        """Execute simulations with proper multiprocessing setup"""
+        """
+        Executes the simulation based on the current model, parameters, and protocol.
+
+        This method performs the following steps:
+        1. Clears previous simulation results and plots.
+        2. Collects the current model parameters.
+        3. Retrieves the voltage protocol (SwpSeq) from the current model.
+           - It handles different protocol formats:
+             - For models with `SwpSeq` as a NumPy array (like CTBNMarkovModel and
+               potentially MarkovModel if adapted), it converts the array data
+               (voltages and epoch end times in samples) into a list of
+               dictionaries, each representing a sweep with durations in ms.
+               A sampling interval of 0.005 ms/sample is assumed for conversion.
+             - For models where `SwpSeq` is already a list of dictionaries (legacy
+               format), it creates a clean copy of each sweep dictionary.
+        4. Adds flags to the parameters to identify the model type (HH, CTBN)
+           for the worker process.
+        5. Initiates a background task (`run_simulation_thread` or a direct call
+           to `run_single_sweep` for each sweep if threading is disabled/simplified)
+           to perform the simulation sweeps.
+        6. The background task calls `run_single_sweep` for each sweep, passing
+           the sweep number, model parameters, and the processed `swp_seq`.
+        7. Results from each sweep are collected. If a sweep is successful and
+           contains 'sim_swp' data, its results are stored.
+        8. After all sweeps complete (or if an error occurs), it calls
+           `update_plots` to display the new data and `save_plot_to_file`
+           to automatically save the generated plot.
+        9. Displays a success or error message to the user.
+        """
+
 
         # Clear previous results and plots before starting new simulation
         self.sim_results = []
@@ -1571,60 +1529,44 @@ except Exception as e:
 
 
 
-    def show_voltage_input_dialog(self, num_sweeps):
-        """Show dialog for user to input command voltages and holding potential for each sweep"""
-        if dpg.does_item_exist("voltage_input_dialog"):
-            dpg.delete_item("voltage_input_dialog")
-        with dpg.window(label="Input Command Voltages and Holding Potential", modal=True, tag="voltage_input_dialog") as dlg:
-            dpg.add_text("Enter command voltages (mV) for each sweep:")
-            voltage_tags = []
-            for i in range(num_sweeps):
-                tag = f"cmd_voltage*{i}"
-                dpg.add_input_int(label=f"Sweep {i+1}", default_value=0, tag=tag, width=150)
-                voltage_tags.append(tag)
-            dpg.add_separator()
-            dpg.add_text("Set holding potential (mV):")
-            dpg.add_input_int(label="Holding Potential", default_value=-80, tag="holding_potential_input", width=150)
-            dpg.add_separator()
-            def on_confirm():
-                voltages = [dpg.get_value(tag) for tag in voltage_tags]
-                holding_potential = dpg.get_value("holding_potential_input")
-                self.loaded_holding_potential = holding_potential
-                dpg.delete_item("voltage_input_dialog")
-                self._continue_data_processing(voltages, self.temp_currents)
-            dpg.add_button(label="OK", callback=on_confirm)
-            dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("voltage_input_dialog"))
-
-    def _continue_data_processing(self, voltage_steps, currents):
-        """Continue processing experimental data after detecting voltage protocol"""
-
-        # Calculate time points for the final data
-        time_points = np.linspace(0, 300, len(currents))
-
-        # Process data into format needed by optimizer
-        self.experimental_data = {}
-        for i, voltage in enumerate(voltage_steps):
-            if i < currents.shape[1]:  # Ensure we don't exceed array bounds
-                self.experimental_data[voltage] = {
-                    'time': time_points,
-                    'current': currents[:, i],
-                    'voltage': voltage
-                }
-        # Automatically update the current plot to display experimental data
-        self.update_current_plot()
-
-
 
     def show_message(self, message, title="Message", is_error=False):
-        """Show a modal message dialog"""
+        """
+        Displays a modal message dialog to the user.
+
+        Args:
+            message (str): The text message to display in the dialog.
+            title (str, optional): The title of the modal dialog window.
+                                   Defaults to "Message".
+            is_error (bool, optional): If True, indicates the message is an error.
+                                       (Currently not used to change dialog appearance,
+                                       but could be used for future styling).
+                                       Defaults to False.
+        """
         with dpg.window(label=title, modal=True, no_close=False, width=400) as modal_id:
             dpg.add_text(message)
             dpg.add_button(label="OK", width=75, callback=lambda: dpg.delete_item(modal_id))
 
     def on_model_change(self, sender, value):
-        """Handle model selection change"""
-        if value == "CTBN Stiff Markov":
-            self.current_model = self.ctbn_stiff_markov_model
+        """
+        Callback function invoked when the selected simulation model changes.
+
+        Based on the `value` from the model selection dropdown:
+        - Sets `self.current_model` to the appropriate model instance
+          (CTBNMarkovModel, MarkovModel, or HHModel).
+        - Updates `self.parameter_names` and `self.parameter_info` to reflect
+          the parameters of the newly selected model.
+        - Calls `setup_parameters()` to refresh the parameter input fields in the GUI.
+        - Calls `setup_voltage_protocol()` to refresh the voltage protocol section.
+        - Calls `update_plots()` to clear and prepare plots for the new model.
+
+        Args:
+            sender (str or int): The tag of the GUI combo box that triggered the callback.
+            value (str): The string value of the selected model
+                         (e.g., "CTBN Markov", "Legacy Markov", "Hodgkin-Huxley").
+        """
+        if value == "CTBN Markov":
+            self.current_model = self.ctbn_markov_model
             self.parameter_names = self.markov_parameters
             self.parameter_info = self.markov_parameter_info
         elif value == "Legacy Markov":
@@ -1646,13 +1588,23 @@ except Exception as e:
         self.update_plots()
     
     def start(self):
-        """Start the GUI"""
+        """
+        Initializes and starts the DearPyGui application.
+
+        This method performs the final steps to launch the GUI:
+        - Makes the viewport visible.
+        - Sets the primary window.
+        - Starts the DearPyGui event loop (blocking).
+        - Destroys the DearPyGui context when the loop exits.
+        """
         dpg.show_viewport()
         dpg.set_primary_window("primary_window", True)
         dpg.start_dearpygui()
         dpg.destroy_context()
 
 if __name__ == '__main__':
+    # Main entry point for the application.
+    # Initializes and starts the IonChannelGUI.
     freeze_support()
     app = IonChannelGUI()
     app.start()

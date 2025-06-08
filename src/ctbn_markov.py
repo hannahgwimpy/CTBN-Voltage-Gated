@@ -2,7 +2,63 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 class CTBNMarkovModel:
+    """
+    Implements a Continuous-Time Bayesian Network (CTBN) based Markov model
+    for simulating ion channel currents, specifically sodium channels.
+
+    This model represents channel states and transitions using CTBN principles,
+    allowing for dynamic calculation of state probabilities over time in response
+    to changing membrane voltages. It includes parameters for activation,
+    inactivation, and various transition rates between channel states.
+
+    The model is designed for vectorized operations where possible to improve
+    simulation speed, particularly in the `Sweep` method which simulates
+    the channel's response to a voltage-clamp protocol. It calculates
+    state occupancies and resulting ionic currents.
+
+    Key Attributes:
+        NumSwps (int): Number of sweeps in the current voltage protocol.
+        vm (float): Current membrane potential in mV.
+        state_probs_flat (np.ndarray): A 1D array representing the probabilities
+            of the channel being in each of its 12 states (6 activation states
+            for I=0 and 6 for I=1).
+        SwpSeq (np.ndarray): The current voltage clamp protocol sequence.
+        SimSwp (np.ndarray): Stores the simulated current for each time point
+            of the last run sweep.
+        SimOp (np.ndarray): Stores the probability of the channel being in an
+            open state.
+        SimIn (np.ndarray): Stores the probability of the channel being in an
+            inactivated state.
+        SimAv (np.ndarray): Stores the probability of the channel being in an
+            available (not inactivated) state.
+        SimCom (np.ndarray): Stores the command voltage for each time point.
+        time (np.ndarray): Time vector for the simulation.
+        vt (np.ndarray): A pre-defined array of voltage points for which rates
+            and currents are pre-calculated or looked up.
+        iscft (np.ndarray): Current scaling factor for each voltage in `vt`.
+        # ... (other important parameters like alcoeff, btslp, etc.)
+
+    The model structure involves:
+    - Initialization of biophysical parameters (`init_parameters`).
+    - Initialization of data structures for storing simulation results and
+      pre-calculated values (`init_waves`).
+    - Calculation of voltage-dependent transition rates (`stRatesVolt`).
+    - Calculation of current-voltage relationships (`CurrVolt`).
+    - Simulation of sweeps using an ODE solver (`Sweep`, `NowDerivs`).
+    - Creation of default voltage protocols (`create_default_protocol`).
+    """
     def __init__(self):
+        """
+        Initializes the CTBNMarkovModel instance.
+
+        Sets up default values for sweep counts, membrane potential,
+        and then calls helper methods to:
+        - Initialize biophysical parameters (`init_parameters`).
+        - Initialize data arrays and pre-calculate voltage-dependent values (`init_waves`).
+        - Update initial transition rates (`update_rates`).
+        - Calculate initial current-voltage relationships (`CurrVolt`).
+        - Create a default voltage protocol (`create_default_protocol`).
+        """
         self.NumSwps = 0
         
         # CTBN state variables - no change needed, these are scalars
@@ -22,7 +78,18 @@ class CTBNMarkovModel:
         self.create_default_protocol()
     
     def init_parameters(self):
-        """Initialize all model parameters - no matrices needed"""
+        """
+        Initializes the biophysical parameters of the CTBN Markov model.
+
+        These parameters define the voltage-dependent kinetics of channel
+        activation, inactivation, and transitions between different states.
+        Parameters include coefficients and slope factors for various rate
+        equations (e.g., `alcoeff`, `alslp` for activation alpha rate).
+        Also initializes derived parameters like `alfac`, `btfac`, and
+        physical constants like `F` (Faraday's constant), `Rgc` (gas constant),
+        `Tkel` (temperature in Kelvin), and ion concentrations.
+        """
+
         # Activation parameters
         self.alcoeff = 150      
         self.alslp = 20           
@@ -78,7 +145,23 @@ class CTBNMarkovModel:
         self.vm = -80
 
     def init_waves(self):
-        """Initialize voltage arrays and current arrays - fully vectorized"""
+        """
+        Initializes data structures and pre-calculates voltage-dependent values.
+
+        This method sets up:
+        - `vt`: A numpy array of voltage points from -200mV to 200mV.
+        - `iscft`: An array to store current scaling factors for each voltage in `vt`.
+        - `state_probs_flat`: A 1D numpy array (size 12) to store the probability
+          of the channel being in each of its 12 states (C1-C6 for I=0, O1-O6 for I=1).
+          Initially, the channel is set to be in the C1 state (A=0, I=0).
+        - Arrays for storing pre-calculated forward and backward transition rates
+          for activation (`fwd_rates_I0`, `fwd_rates_I1`, `bwd_rates_I0`, `bwd_rates_I1`)
+          and inactivation/recovery rates (`inact_on_rates`, `inact_off_rates`)
+          across the `vt` voltage range.
+        
+        Calls `update_rates()` at the end to populate initial rate values.
+        """
+
         self.vt = np.arange(-200, 201)
         
         # Initialize current array
@@ -109,11 +192,27 @@ class CTBNMarkovModel:
         self.update_rates()
 
     def update_rates(self):
-      """Calculate voltage-dependent rates - just calls stRatesVolt"""
-      self.stRatesVolt()
+        """Recalculates and updates all voltage-dependent state transition rates by calling stRatesVolt."""
+        self.stRatesVolt()
 
     def stRatesVolt(self):
-        """Calculate voltage-dependent state transition rates - fully vectorized"""
+        """
+        Calculates and stores voltage-dependent state transition rates.
+
+        This method computes the rates for all transitions in the CTBN model
+        across the pre-defined voltage range `self.vt`. These rates include:
+        - Activation rates (alpha_m, beta_m equivalents) for transitions
+          between activation states (A0 to A5).
+        - Inactivation rates (kon, koff equivalents) for transitions between
+          non-inactivated (I=0) and inactivated (I=1) states.
+        - Other transition rates specific to the CTBN model structure (e.g.,
+          gamma, delta, epsilon, zeta).
+
+        The calculated rates are stored in vectorized arrays like `self.fwd_rates_I0`,
+        `self.bwd_rates_I0`, `self.inact_on_rates`, etc., for efficient lookup
+        during simulations. Temperature scaling is currently fixed (not implemented).
+        """
+
         # Use all voltages at once for vectorized computation
         vt = self.vt
         
@@ -184,7 +283,20 @@ class CTBNMarkovModel:
         self.k136dis_vec = np.minimum(zmt, self.ClipRate)
 
     def CurrVolt(self):
-        """Calculate voltage-dependent sodium currents using Goldman-Hodgkin-Katz equation - fully vectorized"""
+        """
+        Calculates the current-voltage (I-V) relationship for the open state.
+
+        This method computes the single-channel current (`iscft`) for each
+        voltage in the `self.vt` array. It uses the Goldman-Hodgkin-Katz (GHK)
+        current equation, considering sodium ion concentrations (`Nao`, `Nai`)
+        and permeability (`PNasc`).
+
+        The results are stored in `self.iscft`, which is used as a scaling
+        factor during simulations to calculate the total macroscopic current based
+        on the probability of the channel being in the open state.
+        Handles potential division by zero if vm is exactly 0 mV.
+        """
+
         # Set temperature in Kelvin to fixed reference value (22°C)
         self.Tkel = 273.15 + 22.0
         
@@ -215,7 +327,27 @@ class CTBNMarkovModel:
             self.iscft[not_zero] = scaled_PNasc * du5_corrected
 
     def EquilOccup(self, vm):
-        """Calculate equilibrium occupancy using vectorized CTBN approach"""
+        """
+        Calculates the equilibrium state occupancies at a given membrane potential.
+
+        This method constructs the transition rate matrix (Q matrix) for the
+        CTBN model at the specified voltage `vm`. It then solves the system
+        dQ/dt = 0, subject to sum(probabilities) = 1, to find the steady-state
+        probabilities for each of the 12 channel states.
+
+        This is typically used to determine the initial state probabilities
+        before starting a dynamic simulation or to analyze the channel's
+        behavior at a constant holding potential.
+
+        Args:
+            vm (float): The membrane potential (in mV) at which to calculate
+                        equilibrium occupancies.
+
+        Returns:
+            np.ndarray: A 1D array of 12 elements representing the equilibrium
+                        probabilities for each state [P(A0,I0), P(A1,I0), ...,
+                        P(A5,I0), P(A0,I1), ..., P(A5,I1)].
+        """
         self.vm = vm
         self.update_rates()  # Update rates for this voltage
         
@@ -273,15 +405,28 @@ class CTBNMarkovModel:
         return pop
 
     def NowDerivs(self, t, y):
-        """Calculate derivatives using maximally optimized CTBN operations without matrix construction
-        
-        This implementation leverages the CTBN factored representation and avoids matrix construction
-        entirely, which can be more efficient in Python. The implementation maintains exact results
-        while performing direct flux calculations leveraging the factored structure of the CTBN.
-        
-        For a traditional Markov model with N states, the time complexity is O(N²)
-        For the CTBN with factored representation, complexity is significantly reduced due to
-        the decomposition of the full state space into factored components.
+        """
+        Calculates the derivatives of state probabilities for the ODE solver.
+
+        This function is used by `scipy.integrate.solve_ivp` during the
+        simulation of a voltage sweep. It computes dP/dt for each state P,
+        based on the current state probabilities `y` and the transition rates
+        at the current membrane potential `self.vm`.
+
+        The Q matrix (transition rate matrix) is constructed dynamically using
+        pre-calculated rates fetched by `_get_rates_at_vm(self.vm)`.
+        The derivative is then `y_dot = Q.T @ y`.
+
+        Args:
+            t (float): The current time point in the simulation (not explicitly
+                       used in rate calculation as rates depend on `self.vm`
+                       which is updated by the `Sweep` method).
+            y (np.ndarray): A 1D array of current state probabilities for all
+                            12 states.
+
+        Returns:
+            np.ndarray: A 1D array representing the derivatives (dP/dt) for
+                        each of the 12 states.
         """
         # Cache number of channels for performance metrics
         N = self.numchan
@@ -365,7 +510,28 @@ class CTBNMarkovModel:
         return dstdt
 
     def _get_rates_at_vm(self, vm):
-        """Helper function to get all rates at a specific voltage - vectorized lookup"""
+        """
+        Retrieves pre-calculated transition rates for a given membrane potential.
+
+        This helper method finds the closest voltage in `self.vt` to the given
+        `vm` and returns the corresponding pre-calculated forward activation rates
+        (I=0 and I=1), backward activation rates (I=0 and I=1), inactivation
+        on-rates, and inactivation off-rates.
+
+        This is used to efficiently access rates during ODE solving (`NowDerivs`)
+        and equilibrium calculations (`EquilOccup`) without recomputing them.
+
+        Args:
+            vm (float): The membrane potential (in mV) for which to retrieve rates.
+
+        Returns:
+            tuple: A tuple containing six numpy arrays:
+                   (fwd_rates_I0_at_vm, bwd_rates_I0_at_vm,
+                    fwd_rates_I1_at_vm, bwd_rates_I1_at_vm,
+                    inact_on_rates_at_vm, inact_off_rates_at_vm)
+                   Each array contains the rates for the respective transitions
+                   at the specified voltage.
+        """
         # Find closest voltage index
         vidx = np.argmin(np.abs(self.vt - vm))
         
@@ -382,7 +548,32 @@ class CTBNMarkovModel:
         }
 
     def Sweep(self, SwpNo):
-        """Simulate voltage-clamp protocol using vectorized CTBN representation"""
+        """
+        Runs a single voltage-clamp sweep simulation.
+
+        This method simulates the channel's response to a specific sweep (`SwpNo`)
+        from the current voltage protocol (`self.SwpSeq`). It involves:
+        1. Setting initial state probabilities, typically using `EquilOccup` at the
+           holding potential of the first epoch.
+        2. Iterating through each epoch (voltage step) defined in the protocol.
+        3. For each epoch:
+            a. Setting `self.vm` to the epoch's voltage.
+            b. Using `scipy.integrate.solve_ivp` with `self.NowDerivs` to solve
+               the system of ODEs describing state probability changes over time.
+            c. Storing the results (current, open probability, etc.) at sampled
+               time points using `_store_ctbn_results_vectorized`.
+        4. Populating `self.time` with the time vector for the simulation.
+
+        Args:
+            SwpNo (int): The sweep number (0-indexed) from the `self.SwpSeq`
+                         protocol to simulate.
+
+        Returns:
+            tuple: A tuple containing:
+                - t (np.ndarray): The time points at which the ODE solver evaluated
+                  the solution (may not match `self.time` exactly).
+                - self.SimSwp (np.ndarray): The array of simulated currents for the sweep.
+        """
         # Get sweep parameters with bounds checking
         if SwpNo >= self.NumSwps or SwpNo < 0:
             raise ValueError(f"Invalid sweep number {SwpNo}")
@@ -513,7 +704,21 @@ class CTBNMarkovModel:
         return sol.t, self.SimSwp
 
     def _store_ctbn_results(self, idx, t):
-        """Store results for a single time point (legacy implementation for backward compatibility)"""
+        """
+        Stores the simulation results for a single time point.
+
+        This is a convenience wrapper around `_store_ctbn_results_vectorized`
+        for non-batched (single time point) storage of simulation outputs like
+        current, open probability, etc., based on the current `self.state_probs_flat`
+        and `self.vm`.
+
+        Args:
+            idx (int): The index in the simulation output arrays (e.g., `self.SimSwp`)
+                       where results for the current time point should be stored.
+            t (float): The current simulation time (not directly used for storage
+                       logic but often available when this method is called during
+                       non-vectorized result storage).
+        """
         # Call the vectorized version with single indices
         self._store_ctbn_results_vectorized(
             [idx], 
@@ -523,16 +728,20 @@ class CTBNMarkovModel:
     
     def _store_ctbn_results_vectorized(self, indices, state_probs_batch, voltages):
         """
-        Highly optimized vectorized result storage for multiple time points
-        
-        Parameters:
-        -----------
-        indices : array-like
-            Array of indices to store results at
-        state_probs_batch : numpy.ndarray (shape: [batch_size, 12])
-            Batch of state probabilities for each time point
-        voltages : numpy.ndarray (shape: [batch_size])
-            Voltage at each time point
+        Stores a batch of simulation results in their respective arrays.
+
+        Calculates and stores currents, open probabilities, inactivation probabilities,
+        available probabilities, and command voltages for a batch of time points.
+        Uses vectorized operations for efficiency.
+
+        Args:
+            indices (np.ndarray or list): Array of indices in the output arrays
+                                          (e.g., `self.SimSwp`) where results
+                                          should be stored.
+            state_probs_batch (np.ndarray): A 2D array where each row contains the
+                                            12 state probabilities for a time point.
+            voltages (np.ndarray): A 1D array of membrane potentials corresponding
+                                   to each row in `state_probs_batch`.
         """
         if len(indices) == 0:
             return
@@ -563,19 +772,32 @@ class CTBNMarkovModel:
         self.SimAv[indices] = available
         self.SimCom[indices] = voltages
         
-    def create_default_protocol(self, target_voltages=None, holding_potential=-80, 
+    def create_default_protocol(self, target_voltages=None, holding_potential=-80,
                                holding_duration=98, test_duration=200, tail_duration=2):
         """
-        Create protocol with specified target voltages - fully vectorized
-        
+        Creates a default multi-step voltage clamp protocol.
+
+        The protocol consists of a holding period, a test pulse to various
+        target voltages, and a tail pulse back to the holding potential.
+
         Args:
-            target_voltages: List of voltage steps to use (default: [30, 0, -20, -30, -40, -50, -60])
-            holding_potential: Holding potential in mV (default: -80)
-            holding_duration: Duration of holding period in ms (default: 98)
-            test_duration: Duration of test pulse in ms (default: 200)
-            tail_duration: Duration of tail period in ms (default: 2)
+            target_voltages (list, optional): A list of voltages (mV) for the
+                test pulse. Defaults to [30, 0, -20, -30, -40, -50, -60].
+                The number of sweeps will be equal to the number of target voltages.
+            holding_potential (float, optional): Voltage (mV) for the holding
+                and tail periods. Defaults to -80 mV.
+            holding_duration (float, optional): Duration (ms) of the initial
+                holding period. Defaults to 98 ms.
+            test_duration (float, optional): Duration (ms) of the test pulse.
+                Defaults to 200 ms.
+            tail_duration (float, optional): Duration (ms) of the tail pulse.
+                Defaults to 2 ms.
+
+        Sets `self.NumSwps` and `self.SwpSeq` with the generated protocol.
+        Also stores the protocol under an attribute named `SwpSeq{self.BsNm}`.
+        Calls `self.CurrVolt()` to ensure current-voltage relationships are up to date.
         """
-        
+
         self.BsNm = "MultiStepKeyVoltages"
         
         # Use default target voltages if none provided
