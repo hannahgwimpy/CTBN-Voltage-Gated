@@ -232,9 +232,6 @@ class CTBNMarkovModel:
         konop = self.OpOnCoeff * np.exp(vt / self.OpOnSlp)
         koffop = self.OpOffCoeff * np.exp(-vt / self.OpOffSlp)
         
-        # Clipping will be applied to the final derived rates below
-        # Removed pre-clipping of: amt, bmt, gmt, dmt, konlo, kofflo, konop, koffop
-        
         # Update Q_{A|I} rates - fully vectorized
         # For I = 0 (not inactivated)
         for a in range(5):  # Forward rates 0→1, 1→2, 2→3, 3→4, 4→5
