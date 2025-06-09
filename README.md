@@ -1,5 +1,7 @@
 # CTBN-Voltage-Gated
 
+[![DOI](https://zenodo.org/badge/998520127.svg)](https://doi.org/10.5281/zenodo.15625711)
+
 A GUI application and associated scripts for simulating voltage-gated sodium channel models, showcasing CTBN Markov model's advantages over the Legacy Hodgkin-Huxley and Markov models. It showcases sodium current traces with customizable parameters and voltage protocols, allowing users to explore the differences between Hodgkin-Huxley, CTBN Markov, and legacy Markov models. The `data` directory contains data generated from model comparisons and figures used in the associated paper.
 
 ## Features
