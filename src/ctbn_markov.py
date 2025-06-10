@@ -60,11 +60,19 @@ class CTBNMarkovModel:
         - Create a default voltage protocol (`create_default_protocol`).
         """
         self.NumSwps = 0
+
+        # --- Parameters for Phantom State Extension Demonstration ---
+        self.demonstrate_cooperative_transition = False
+        self.k_coop = 100.0  # Rate for S_A -> S_P (e.g., 1/ms)
+        self.k_phantom = 1e6 # Rate for S_P -> S_B (e.g., 1/ms, very fast)
+        # ----------------------------------------------------------
+
         
         # CTBN state variables - no change needed, these are scalars
         self.A = 0  # Activation index (0-5)
         self.I = 0  # Inactivation flag (0-1)
-        
+        self.num_states = 12 # Total number of states in the model
+    
         # Initialize membrane voltage
         self.vm = -80  # Default holding potential
         
@@ -405,105 +413,114 @@ class CTBNMarkovModel:
         """
         Calculates the derivatives of state probabilities for the ODE solver.
 
-        This function is used by `scipy.integrate.solve_ivp` during the
-        simulation of a voltage sweep. It computes dP/dt for each state P,
-        based on the current state probabilities `y` and the transition rates
-        at the current membrane potential `self.vm`.
-
-        The Q matrix (transition rate matrix) is constructed dynamically using
-        pre-calculated rates fetched by `_get_rates_at_vm(self.vm)`.
-        The derivative is then `y_dot = Q.T @ y`.
+        If `self.demonstrate_cooperative_transition` is True, this method
+        modifies the forward and backward rates for the specific cooperative
+        pathway (A0,I0 <-> A1,I0 <-> A2,I0, corresponding to states 0, 1, 2)
+        to use `self.k_coop` and `self.k_phantom` and sets reverse rates to zero
+        for this pathway. All other state transitions in the model remain active
+        and use their standard voltage-dependent rates.
+        Otherwise, it computes dP/dt for all states based on the full model
+        using all standard rates.
 
         Args:
-            t (float): The current time point in the simulation (not explicitly
-                       used in rate calculation as rates depend on `self.vm`
-                       which is updated by the `Sweep` method).
-            y (np.ndarray): A 1D array of current state probabilities for all
-                            12 states.
+            t (float): Current time.
+            y (np.ndarray): Current state probabilities.
 
         Returns:
-            np.ndarray: A 1D array representing the derivatives (dP/dt) for
-                        each of the 12 states.
+            np.ndarray: Derivatives (dP/dt) for each state.
         """
-        # Cache number of channels for performance metrics
-        N = self.numchan
-        
+        dstdt = np.zeros_like(y) # Initialize all derivatives to zero
+
         # ===== STAGE 1: FAST VOLTAGE LOOKUP =====
-        # Optimized O(1) voltage lookup using cached values
         if not hasattr(self, '_voltage_lut_cache') or self._voltage_lut_cache[0] != self.vm:
             vidx = np.searchsorted(self.vt, self.vm)
             vidx = min(max(vidx, 0), len(self.vt) - 1)
-            # Cache the result to avoid redundant calculations
             self._voltage_lut_cache = (self.vm, vidx)
         else:
-            # Use cached index
             vidx = self._voltage_lut_cache[1]
         
         # ===== STAGE 2: CACHED RATE RETRIEVAL =====
-        # Get rates at current voltage (with caching for repeated calls)
+        # Retrieve original, unmodified rates from the model's tables or cache
         if not hasattr(self, '_rate_cache') or self._rate_cache[0] != vidx:
-            # Extract rates at current voltage using direct indexing
-            fwd_I0 = self.fwd_rates_I0[vidx]
-            bwd_I0 = self.bwd_rates_I0[vidx]
-            fwd_I1 = self.fwd_rates_I1[vidx]
-            bwd_I1 = self.bwd_rates_I1[vidx]
-            inact_on = self.inact_on_rates[vidx]
-            inact_off = self.inact_off_rates[vidx]
-            
-            # Cache the rates for future use
-            self._rate_cache = (vidx, fwd_I0, bwd_I0, fwd_I1, bwd_I1, inact_on, inact_off)
+            _fwd_I0_orig = self.fwd_rates_I0[vidx]
+            _bwd_I0_orig = self.bwd_rates_I0[vidx]
+            _fwd_I1_orig = self.fwd_rates_I1[vidx]
+            _bwd_I1_orig = self.bwd_rates_I1[vidx]
+            _inact_on_orig = self.inact_on_rates[vidx]
+            _inact_off_orig = self.inact_off_rates[vidx]
+            self._rate_cache = (vidx, _fwd_I0_orig, _bwd_I0_orig, _fwd_I1_orig, _bwd_I1_orig, _inact_on_orig, _inact_off_orig)
         else:
             # Use cached rates
-            _, fwd_I0, bwd_I0, fwd_I1, bwd_I1, inact_on, inact_off = self._rate_cache
+            _, _fwd_I0_orig, _bwd_I0_orig, _fwd_I1_orig, _bwd_I1_orig, _inact_on_orig, _inact_off_orig = self._rate_cache
+
+        # Make copies of rates that might be modified for the demonstration
+        current_fwd_I0 = np.copy(_fwd_I0_orig)
+        current_bwd_I0 = np.copy(_bwd_I0_orig)
         
+        # Rates that are not modified by the demonstration can be used directly from original retrieved versions
+        current_fwd_I1 = _fwd_I1_orig
+        current_bwd_I1 = _bwd_I1_orig
+        current_inact_on = _inact_on_orig
+        current_inact_off = _inact_off_orig
+
+        if self.demonstrate_cooperative_transition:
+            # Override specific rates for the cooperative pathway S_A -> S_P -> S_B
+            # This pathway is mapped to states (A0,I0) -> (A1,I0) -> (A2,I0)
+            # which correspond to indices 0, 1, 2 of the probs_I0 array.
+            
+            # fwd_I0[0] is rate for (A0,I0) -> (A1,I0)
+            current_fwd_I0[0] = self.k_coop
+            # fwd_I0[1] is rate for (A1,I0) -> (A2,I0)
+            current_fwd_I0[1] = self.k_phantom
+            
+            # bwd_I0[0] is rate for (A1,I0) -> (A0,I0)
+            current_bwd_I0[0] = 0.0  # Make unidirectional for demonstration clarity
+            # bwd_I0[1] is rate for (A2,I0) -> (A1,I0)
+            current_bwd_I0[1] = 0.0  # Make unidirectional for demonstration clarity
+
         # ===== STAGE 3: DIRECT FLUX CALCULATION WITHOUT MATRIX CONSTRUCTION =====
-        # Get views of state probability vectors for efficiency
         probs_I0 = y[:6]  # Activation state probabilities with I=0
-        probs_I1 = y[6:12]  # Activation state probabilities with I=1
+        probs_I1 = y[6:12] # Activation state probabilities with I=1
         
-        # Allocate the derivative array once and use views
-        dstdt = np.zeros_like(y)
         deriv_I0 = dstdt[:6]  # View into first half of dstdt
-        deriv_I1 = dstdt[6:12]  # View into second half of dstdt
+        deriv_I1 = dstdt[6:12] # View into second half of dstdt
         
-        # ===== CORE ALGORITHM: DIRECT FLUX CALCULATIONS =====
-        # This is mathematically equivalent to matrix multiplication but avoids matrix construction
         # 1. Forward activation transitions (a → a+1) for I=0 states
         for i in range(5):
-            flux = fwd_I0[i] * probs_I0[i]
-            deriv_I0[i] -= flux     # Outgoing flux
-            deriv_I0[i+1] += flux   # Incoming flux
+            flux = current_fwd_I0[i] * probs_I0[i] # Uses potentially modified rates
+            deriv_I0[i] -= flux
+            deriv_I0[i+1] += flux
         
         # 2. Backward activation transitions (a → a-1) for I=0 states
         for i in range(5):
-            flux = bwd_I0[i] * probs_I0[i+1]
-            deriv_I0[i+1] -= flux   # Outgoing flux
-            deriv_I0[i] += flux     # Incoming flux
+            flux = current_bwd_I0[i] * probs_I0[i+1] # Uses potentially modified rates
+            deriv_I0[i+1] -= flux
+            deriv_I0[i] += flux
         
         # 3. Forward activation transitions (a → a+1) for I=1 states
         for i in range(5):
-            flux = fwd_I1[i] * probs_I1[i]
-            deriv_I1[i] -= flux     # Outgoing flux
-            deriv_I1[i+1] += flux   # Incoming flux
+            flux = current_fwd_I1[i] * probs_I1[i] # Uses original rates
+            deriv_I1[i] -= flux
+            deriv_I1[i+1] += flux
         
         # 4. Backward activation transitions (a → a-1) for I=1 states
         for i in range(5):
-            flux = bwd_I1[i] * probs_I1[i+1]
-            deriv_I1[i+1] -= flux   # Outgoing flux
-            deriv_I1[i] += flux     # Incoming flux
+            flux = current_bwd_I1[i] * probs_I1[i+1] # Uses original rates
+            deriv_I1[i+1] -= flux
+            deriv_I1[i] += flux
         
         # 5. Inactivation transitions (I=0 → I=1) - coupling between activation components
         for i in range(6):
-            flux = inact_on[i] * probs_I0[i]
-            deriv_I0[i] -= flux    # State leaving I=0
-            deriv_I1[i] += flux    # State entering I=1
+            flux = current_inact_on[i] * probs_I0[i] # Uses original rates
+            deriv_I0[i] -= flux
+            deriv_I1[i] += flux
         
         # 6. Recovery transitions (I=1 → I=0) - coupling between activation components
         for i in range(6):
-            flux = inact_off[i] * probs_I1[i]
-            deriv_I1[i] -= flux    # State leaving I=1
-            deriv_I0[i] += flux    # State entering I=0
-        
+            flux = current_inact_off[i] * probs_I1[i] # Uses original rates
+            deriv_I1[i] -= flux
+            deriv_I0[i] += flux
+                
         return dstdt
 
     def _get_rates_at_vm(self, vm):
