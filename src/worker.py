@@ -65,17 +65,19 @@ def run_single_sweep(args):
         if is_hh_model:
             model = HHModel()
         elif is_anticonvulsant_model:
+            drug_type = parameters.get('drug_type', 'mixed')
+            drug_concentration = parameters.get('drug_concentration', 0.0)
             if use_ctbn:
-                model = AnticonvulsantCTBNMarkovModel()
+                model = AnticonvulsantCTBNMarkovModel(drug_concentration=drug_concentration, drug_type=drug_type)
             else:
-                model = AnticonvulsantMarkovModel()
+                model = AnticonvulsantMarkovModel(drug_concentration=drug_concentration, drug_type=drug_type)
         elif use_ctbn:
             model = CTBNMarkovModel()
         else:
             model = MarkovModel()
 
         # Remove model type flags from parameters
-        model_flags = ['is_hh_model', 'use_ctbn', 'is_anticonvulsant_model']
+        model_flags = ['is_hh_model', 'use_ctbn', 'is_anticonvulsant_model', 'drug_type', 'drug_concentration']
         parameters = {k: v for k, v in parameters.items() if k not in model_flags}
 
         # Set parameters

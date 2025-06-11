@@ -64,13 +64,7 @@ class IonChannelGUI:
         ]
 
         self.hh_parameters = ['g_Na', 'E_Na', 'C_m', 'numchan']
-        self.anticonvulsant_markov_parameters = self.markov_parameters + [
-            'drug_concentration', 
-            'k_on_resting', 
-            'k_on_inactivated', 
-            'k_off_resting', 
-            'k_off_inactivated'
-        ]
+        self.anticonvulsant_markov_parameters = self.markov_parameters + ['drug_concentration']
         self.parameter_names = self.markov_parameters  # Default
 
         # Parameter descriptions and bounds
@@ -125,11 +119,7 @@ class IonChannelGUI:
 
         self.anticonvulsant_markov_parameter_info = self.markov_parameter_info.copy()
         self.anticonvulsant_markov_parameter_info.update({
-            'drug_concentration': {'desc': 'Drug Conc. (µM)', 'bounds': (0.0, 1000.0), 'default': 0.0, 'format': '%.1f'},
-            'k_on_resting': {'desc': 'k_on Rest (µM⁻¹ms⁻¹)', 'bounds': (0.00001, 0.1), 'default': 0.001, 'format': '%.5f'},
-            'k_on_inactivated': {'desc': 'k_on Inact (µM⁻¹ms⁻¹)', 'bounds': (0.001, 1.0), 'default': 0.1, 'format': '%.3f'},
-            'k_off_resting': {'desc': 'k_off Rest (ms⁻¹)', 'bounds': (0.1, 100.0), 'default': 10.0, 'format': '%.1f'},
-            'k_off_inactivated': {'desc': 'k_off Inact (ms⁻¹)', 'bounds': (0.01, 20.0), 'default': 1.0, 'format': '%.2f'}
+            'drug_concentration': {'desc': 'Drug Concentration (μM)', 'bounds': (0, 100)}
         })
         self.parameter_info = self.markov_parameter_info  # Default
 
@@ -712,9 +702,6 @@ except Exception as e:
                 # and structure of AnticonvulsantMarkovModel.init_parameters
                 drug_params_display_to_attr = {
                     "Drug Conc. (µM)": "drug_concentration",
-                    "Base k_on Rest (µM⁻¹ms⁻¹)": "k_on_resting_base",
-                    "Base k_on Inact (µM⁻¹ms⁻¹)": "k_on_inactivated_base",
-                    "Base k_off (ms⁻¹)": "k_off" 
                 }
                 
                 for display_label, attr_name in drug_params_display_to_attr.items():
@@ -975,7 +962,7 @@ except Exception as e:
                 time_points.append(300)
                 voltage_points.append(tail_v)
 
-            label = f"{step_volt:.1f} mV"
+            label = f"{int(step_volt)} mV"
 
             # Add the new line series to the plot
             dpg.add_line_series(
@@ -1449,8 +1436,6 @@ except Exception as e:
                 test_duration,
                 total_duration]
             volt = [hold, hold, step, step, hold, hold]
-            series = dpg.add_line_series(
-                time, volt, parent=y_axis, label=f"Sim {step}")
 
     def run_simulation(self):
         """
@@ -1506,6 +1491,11 @@ except Exception as e:
         parameters['is_hh_model'] = isinstance(self.current_model, HHModel)
         parameters['use_ctbn'] = isinstance(self.current_model, (CTBNMarkovModel, AnticonvulsantCTBNMarkovModel))
         parameters['is_anticonvulsant_model'] = isinstance(self.current_model, (AnticonvulsantMarkovModel, AnticonvulsantCTBNMarkovModel))
+
+        # Pass drug_type for anticonvulsant models
+        if parameters['is_anticonvulsant_model']:
+            if hasattr(self.current_model, 'drug_type'):
+                parameters['drug_type'] = self.current_model.drug_type
 
         # Get protocol from current model - handle different formats for each model
         swp_seq = []
@@ -1593,7 +1583,6 @@ except Exception as e:
                 # Schedule plot update on the main GUI thread.
                 dpg.split_frame()
                 self.update_plots()
-                self.show_message_dialog("Success", "Simulation completed successfully.")
             else:
                 self.show_message_dialog("Error", "Simulation failed for all sweeps. Check console for details.")
 
@@ -1624,57 +1613,166 @@ except Exception as e:
             dpg.add_button(label="OK", width=75, callback=lambda: dpg.delete_item(modal_id))
 
     def on_model_change(self, sender, app_data):
-        """
-        Callback function invoked when the selected simulation model changes.
+    """
+    Callback function invoked when the selected simulation model changes.
 
-        Based on the `value` from the model selection dropdown:
-        - Sets `self.current_model` to the appropriate model instance
-          (CTBNMarkovModel, MarkovModel, or HHModel).
-        - Updates `self.parameter_names` and `self.parameter_info` to reflect
-          the parameters of the newly selected model.
-        - Calls `setup_parameters()` to refresh the parameter input fields in the GUI.
-        - Calls `setup_voltage_protocol()` to refresh the voltage protocol section.
-        - Calls `update_plots()` to clear and prepare plots for the new model.
+    Stores current parameter and voltage protocol settings before switching models,
+    then restores these settings to the new model's UI after it's rebuilt.
+    This allows for easier model comparison by preserving user configurations.
 
-        Args:
-            sender (str or int): The tag of the GUI combo box that triggered the callback.
-            value (str): The string value of the selected model
-                         (e.g., "CTBN Markov", "Legacy Markov", "Hodgkin-Huxley").
-        """
-        if app_data == "CTBN Markov":
-            self.current_model = self.ctbn_markov_model
-            self.current_model_name = app_data  # Update current_model_name
-            self.parameter_names = self.markov_parameters
-            self.parameter_info = self.markov_parameter_info
-        elif app_data == "Legacy Markov":
-            self.current_model = self.legacy_markov_model
-            self.current_model_name = app_data  # Update current_model_name
-            self.parameter_names = self.markov_parameters
-            self.parameter_info = self.markov_parameter_info
-        elif app_data == "Hodgkin-Huxley":
-            self.current_model = self.legacy_hh_model
-            self.current_model_name = app_data  # Update current_model_name
-            self.parameter_names = self.hh_parameters
-            self.parameter_info = self.hh_parameter_info
-        elif app_data == "Anticonvulsant Legacy Markov":
-            self.current_model = self.anticonvulsant_markov_model
-            self.current_model_name = app_data  # Update current_model_name
-            self.parameter_names = self.anticonvulsant_markov_parameters
-            self.parameter_info = self.anticonvulsant_markov_parameter_info
-        elif app_data == "Anticonvulsant CTBN Markov":
-            self.current_model = self.anticonvulsant_ctbn_markov_model
-            self.current_model_name = app_data  # Update current_model_name
-            self.parameter_names = self.anticonvulsant_markov_parameters
-            self.parameter_info = self.anticonvulsant_markov_parameter_info
+    Args:
+        sender (str or int): The tag of the GUI combo box that triggered the callback.
+        app_data (str): The string value of the selected model.
+    """
+    # --- 1. Store current settings BEFORE changing the model --- 
+    stored_params = {}
+    stored_protocol = {}
 
-        # Update parameter display
-        self.setup_parameters()
+    # Check if a model is currently selected and its UI elements might exist
+    if hasattr(self, 'current_model') and self.current_model and hasattr(self, 'parameter_names'):
+        outgoing_parameter_names = list(self.parameter_names) # Parameters of the model being switched FROM
+        outgoing_model_name = str(self.current_model_name) # Name of the model being switched FROM
 
-        # Update voltage protocol
-        self.setup_protocol_widgets()
+        for param_name in outgoing_parameter_names:
+            param_tag = f"param_input_{param_name}"
+            if dpg.does_item_exist(param_tag):
+                try:
+                    stored_params[param_name] = dpg.get_value(param_tag)
+                except Exception:
+                    pass # Ignore if value can't be fetched
 
-        # Update all plots with new model
-        self.update_plots()
+        numchan_tag = "param_input_numchan"
+        if dpg.does_item_exist(numchan_tag):
+            try:
+                stored_params["numchan"] = dpg.get_value(numchan_tag)
+            except Exception:
+                pass
+
+        if "Anticonvulsant" in outgoing_model_name:
+            if dpg.does_item_exist("drug_type_combo"):
+                try:
+                    stored_params["drug_type"] = dpg.get_value("drug_type_combo")
+                except Exception:
+                    pass
+            drug_conc_tag = "param_input_drug_concentration"
+            if dpg.does_item_exist(drug_conc_tag):
+                try:
+                    stored_params["drug_concentration"] = dpg.get_value(drug_conc_tag)
+                except Exception:
+                    pass
+        
+        if dpg.does_item_exist("protocol_type_radio"):
+            try:
+                stored_protocol["type"] = dpg.get_value("protocol_type_radio")
+            except Exception:
+                pass            
+        if dpg.does_item_exist("num_sweeps_input"):
+            try:
+                stored_protocol["num_sweeps"] = dpg.get_value("num_sweeps_input")
+            except Exception:
+                pass
+
+        if stored_protocol.get("type") == "Custom" and hasattr(self, 'voltage_steps_inputs'):
+            stored_protocol["custom_steps"] = []
+            for step_tags in self.voltage_steps_inputs:
+                if dpg.does_item_exist(step_tags['voltage_tag']) and dpg.does_item_exist(step_tags['duration_tag']):
+                    try:
+                        voltage = dpg.get_value(step_tags['voltage_tag'])
+                        duration = dpg.get_value(step_tags['duration_tag'])
+                        stored_protocol["custom_steps"].append({'voltage': voltage, 'duration': duration})
+                    except Exception:
+                        pass
+
+    # --- 2. Switch model (existing logic) ---
+    if app_data == "CTBN Markov":
+        self.current_model = self.ctbn_markov_model
+        self.current_model_name = app_data
+        self.parameter_names = self.markov_parameters
+        self.parameter_info = self.markov_parameter_info
+    elif app_data == "Legacy Markov":
+        self.current_model = self.legacy_markov_model
+        self.current_model_name = app_data
+        self.parameter_names = self.markov_parameters
+        self.parameter_info = self.markov_parameter_info
+    elif app_data == "Hodgkin-Huxley":
+        self.current_model = self.legacy_hh_model
+        self.current_model_name = app_data
+        self.parameter_names = self.hh_parameters
+        self.parameter_info = self.hh_parameter_info
+    elif app_data == "Anticonvulsant Legacy Markov":
+        self.current_model = self.anticonvulsant_markov_model
+        self.current_model_name = app_data
+        self.parameter_names = self.anticonvulsant_markov_parameters
+        self.parameter_info = self.anticonvulsant_markov_parameter_info
+    elif app_data == "Anticonvulsant CTBN Markov":
+        self.current_model = self.anticonvulsant_ctbn_markov_model
+        self.current_model_name = app_data
+        self.parameter_names = self.anticonvulsant_markov_parameters
+        self.parameter_info = self.anticonvulsant_markov_parameter_info
+
+    # --- 3. Clear old simulation data (existing logic) ---
+    self.sim_results = []
+    self.last_plot_data = {}
+
+    # --- 4. Rebuild UI for new model (existing logic) ---
+    self.setup_parameters() 
+    self.setup_protocol_widgets()
+
+    # --- 5. Restore settings to the new model's UI ---
+    if stored_params: # Only restore if we stored something
+        for param_name, value in stored_params.items():
+            if param_name not in ["numchan", "drug_type", "drug_concentration"]:
+                param_tag = f"param_input_{param_name}"
+                if param_name in self.parameter_names and dpg.does_item_exist(param_tag):
+                    dpg.set_value(param_tag, value)
+                    self.on_parameter_change(param_tag, value, param_name)
+        
+        if "numchan" in stored_params:
+            numchan_tag_new = "param_input_numchan"
+            if dpg.does_item_exist(numchan_tag_new):
+                 # Check if new model actually uses 'numchan' conceptually (e.g. HH vs Markov)
+                 # For now, assume if the UI element exists, it's okay to set.
+                dpg.set_value(numchan_tag_new, stored_params["numchan"])
+                self.on_parameter_change(numchan_tag_new, stored_params["numchan"], "numchan")
+
+        is_new_model_anticonvulsant = "Anticonvulsant" in self.current_model_name
+        if is_new_model_anticonvulsant:
+            if "drug_type" in stored_params and dpg.does_item_exist("drug_type_combo"):
+                dpg.set_value("drug_type_combo", stored_params["drug_type"])
+                self.on_drug_type_change(None, stored_params["drug_type"], None)
+
+            if "drug_concentration" in stored_params:
+                drug_conc_tag_new = "param_input_drug_concentration"
+                if "drug_concentration" in self.parameter_names and dpg.does_item_exist(drug_conc_tag_new):
+                    dpg.set_value(drug_conc_tag_new, stored_params["drug_concentration"])
+                    self.on_parameter_change(drug_conc_tag_new, stored_params["drug_concentration"], "drug_concentration")
+
+    if stored_protocol: # Only restore if we stored something
+        if "type" in stored_protocol and dpg.does_item_exist("protocol_type_radio"):
+            dpg.set_value("protocol_type_radio", stored_protocol["type"])
+            self.current_protocol_type = stored_protocol["type"]
+            dpg.configure_item("custom_protocol_settings", show=(self.current_protocol_type == "Custom"))
+            dpg.configure_item("iv_curve_settings_group", show=(self.current_protocol_type == "IV Curve"))
+
+        if "num_sweeps" in stored_protocol and dpg.does_item_exist("num_sweeps_input"):
+            dpg.set_value("num_sweeps_input", stored_protocol["num_sweeps"])
+
+        if stored_protocol.get("type") == "Custom" and "custom_steps" in stored_protocol:
+            if hasattr(self, 'voltage_steps_inputs'):
+                while self.voltage_steps_inputs:
+                    self.remove_voltage_step()
+            
+            for step_data in stored_protocol["custom_steps"]:
+                self.add_voltage_step()
+                if self.voltage_steps_inputs: # Check if add_voltage_step was successful
+                    new_step_tags = self.voltage_steps_inputs[-1]
+                    dpg.set_value(new_step_tags['voltage_tag'], step_data['voltage'])
+                    dpg.set_value(new_step_tags['duration_tag'], step_data['duration'])
+        
+        self.apply_voltage_protocol()
+
+    # --- 6. Update plots (existing logic) ---
+    self.update_plots()
 
     def start(self):
         """

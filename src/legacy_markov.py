@@ -1174,27 +1174,44 @@ class MarkovModel:
         
 class AnticonvulsantMarkovModel:
     """
-    Extended Markov model with anticonvulsant drug binding based on Kuo (1998).
+    24-state Markov model for voltage-gated sodium channels with anticonvulsant drug binding.
     
-    This extends the original 12-state Kuo-Bean model to 24 states by adding
-    drug-bound versions of each state. Key findings from Kuo (1998):
-    - Common external binding site for phenytoin, carbamazepine, lamotrigine
-    - Much higher affinity for inactivated states (KI ~9-25 μM) vs resting states (KR ~mM range)  
-    - Single occupancy: one drug molecule per channel
-    - External application only
-    - Drug-specific recovery kinetics: CBZ τ~180ms, LTG τ~320ms, DPH τ~180ms
+    This model extends the 12-state Kuo-Bean sodium channel model to include drug binding
+    states, based on the anticonvulsant binding site characterized by Kuo (1998). The model
+    captures state-dependent drug affinity with ~100-fold higher affinity for inactivated
+    states compared to resting states.
     
-    States 0-11: Drug-free states (original model)
-    States 12-23: Drug-bound states
+    State Organization:
+        - States 0-5: Drug-free closed/open states (C1-C5, O)
+        - States 6-11: Drug-free inactivated states (I1-I6)
+        - States 12-17: Drug-bound closed/open states (DC1-DC5, DO)
+        - States 18-23: Drug-bound inactivated states (DI1-DI6)
+    
+    Attributes:
+        num_states (int): Total number of states (24)
+        drug_concentration (float): Drug concentration in μM
+        drug_type (str): Type of anticonvulsant ('CBZ', 'LTG', 'DPH', or 'MIXED')
+        vm (float): Current membrane voltage in mV
+        pop (numpy.ndarray): State probability vector (24 elements)
+        time (numpy.ndarray): Time vector for simulation results
+        SimSwp (numpy.ndarray): Simulated current trace
+        SimOp (numpy.ndarray): Open state probability over time
+        SimIn (numpy.ndarray): Inactivated state probability over time
+        SimDrugBound (numpy.ndarray): Drug-bound fraction over time
     """
     
     def __init__(self, drug_concentration=0.0, drug_type='mixed'):
         """
-        Initialize the anticonvulsant-extended Markov model.
-
-        Args:
-            drug_concentration (float): Anticonvulsant concentration in μM
-            drug_type (str): 'CBZ', 'LTG', 'DPH', or 'mixed' for average parameters
+        Initialize the anticonvulsant Markov model.
+        
+        Parameters:
+            drug_concentration (float): Initial drug concentration in μM. Default is 0.0.
+            drug_type (str): Type of anticonvulsant drug. Options are:
+                - 'CBZ': Carbamazepine
+                - 'LTG': Lamotrigine  
+                - 'DPH': Phenytoin (Diphenylhydantoin)
+                - 'MIXED': Average parameters of all three drugs
+                Default is 'mixed'.
         """
         self.NumSwps = 0
         self.num_states = 25  # Extended to 24 states
@@ -1216,10 +1233,14 @@ class AnticonvulsantMarkovModel:
 
     def set_drug_type(self, drug_type):
         """
-        Set the type of anticonvulsant drug and update model parameters.
-
-        Args:
-            drug_type (str): 'CBZ', 'LTG', 'DPH', or 'mixed'.
+        Change the drug type and update all dependent parameters.
+        
+        This method reinitializes drug-specific parameters while maintaining
+        the current drug concentration. The equilibrium state distribution
+        is recalculated for the new drug type.
+        
+        Parameters:
+            drug_type (str): New drug type ('CBZ', 'LTG', 'DPH', or 'MIXED')
         """
         self.drug_type = drug_type.upper()
         self.init_parameters()  # Re-initialize drug-specific base affinities and rates
@@ -1228,18 +1249,38 @@ class AnticonvulsantMarkovModel:
 
     def set_drug_concentration(self, drug_concentration):
         """
-        Set the anticonvulsant drug concentration and update model parameters.
-
-        Args:
-            drug_concentration (float): Concentration in μM.
+        Update the drug concentration and recalculate binding rates.
+        
+        This method updates concentration-dependent binding rates and
+        recalculates the equilibrium state distribution at the current
+        membrane voltage.
+        
+        Parameters:
+            drug_concentration (float): New drug concentration in μM
         """
         self.drug_concentration = drug_concentration
         self._update_drug_rates() # Apply new concentration
         self.pop = self.EquilOccup(self.vm) # Re-calculate equilibrium occupancy
     
     def init_parameters(self):
-        """Initialize biophysical parameters with Kuo 1998-consistent kinetics."""
+        """
+        Initialize all model parameters including drug-specific binding kinetics.
         
+        This method sets up:
+        1. Original Kuo-Bean sodium channel gating parameters
+        2. Drug-specific binding affinities and rates from Kuo 1998
+        3. Physical constants and scaling factors
+        
+        The drug-specific parameters include:
+        - KI_inactivated: Dissociation constant for inactivated states (μM)
+        - recovery_tau: Time constant for recovery from drug block (ms)
+        - k_off: Drug unbinding rate (1/ms)
+        - k_on: Concentration-dependent binding rates (1/ms/μM)
+        
+        Notes:
+            Resting state affinity (KR) is set to 100x weaker than inactivated
+            state affinity based on Kuo 1998 findings.
+        """
         # Original Kuo-Bean parameters (unchanged)
         self.alcoeff = 150      
         self.alslp = 20           
@@ -1273,8 +1314,6 @@ class AnticonvulsantMarkovModel:
         # Calculate alfac and btfac (unchanged)
         self.alfac = np.sqrt(np.sqrt(self.ConHiCoeff / self.ConCoeff))
         self.btfac = np.sqrt(np.sqrt(self.CoffCoeff / self.CoffHiCoeff))
-        
-        # ========== CORRECTED: Kuo 1998-consistent anticonvulsant parameters ==========
         
         # Drug-specific binding affinities from Kuo 1998
         self.drug_params = {
@@ -1337,7 +1376,19 @@ class AnticonvulsantMarkovModel:
         self._update_drug_rates()
     
     def _update_drug_rates(self):
-        """Update drug binding rates based on current concentration."""
+        """
+        Update concentration-dependent drug binding rates.
+        
+        This private method calculates the actual binding rates based on
+        the current drug concentration. The binding rate k_on is proportional
+        to drug concentration, while k_off is concentration-independent.
+        
+        Updates:
+            k_on_resting: Binding rate to resting/closed states (1/ms)
+            k_on_inactivated: Binding rate to inactivated states (1/ms)
+            k_off_resting: Unbinding rate from resting states (1/ms)
+            k_off_inactivated: Unbinding rate from inactivated states (1/ms)
+        """
         # Calculate concentration-dependent binding rates
         self.k_on_resting = self.k_on_resting_base * self.drug_concentration
         self.k_on_inactivated = self.k_on_inactivated_base * self.drug_concentration
@@ -1347,7 +1398,18 @@ class AnticonvulsantMarkovModel:
         self.k_off_inactivated = self.k_off
     
     def init_waves(self):
-        """Initialize data arrays for 24-state simulation."""
+        """
+        Initialize arrays for voltage-dependent rates and state variables.
+        
+        This method pre-allocates arrays for:
+        - Voltage vector (-200 to +200 mV)
+        - State probability vector (24 states)
+        - Rate constant arrays for all transitions
+        - Current-voltage relationship
+        
+        It also calls methods to calculate voltage-dependent rates and
+        create the default voltage protocol.
+        """
         self.vt = np.arange(-200, 201)
         
         # Create state array with 24 elements
@@ -1364,9 +1426,17 @@ class AnticonvulsantMarkovModel:
         self.stRatesVolt()
 
     def create_rate_waves(self):
-        """Create arrays for voltage-dependent rates."""
+        """
+        Create arrays for all voltage-dependent transition rates.
         
-        # Original transition rates
+        This method pre-allocates numpy arrays for each transition rate
+        in the 24-state model. Rate names follow the convention:
+        k[from][to]dis for transitions between states.
+        
+        Notes:
+            The '_vec' suffix indicates these are vectorized arrays
+            containing rates at all voltages in self.vt.
+        """
         rate_names = ['k12dis', 'k23dis', 'k34dis', 'k45dis', 'k56dis',
                      'k65dis', 'k54dis', 'k43dis', 'k32dis', 'k21dis',
                      'k17dis', 'k71dis', 'k28dis', 'k82dis', 'k39dis',
@@ -1380,8 +1450,22 @@ class AnticonvulsantMarkovModel:
             setattr(self, name + '_vec', np.zeros_like(self.vt, dtype=float))
     
     def stRatesVolt(self):
-        """Calculate voltage-dependent rates for original states."""
+        """
+        Calculate voltage-dependent transition rates for all voltages.
         
+        This method computes all transition rates based on the Kuo-Bean
+        formulation with exponential voltage dependence. Rates are
+        calculated for the entire voltage range and stored in vectorized
+        arrays for efficient lookup during simulations.
+        
+        The rates include:
+        - Activation/deactivation transitions
+        - Fast inactivation/recovery transitions  
+        - State-dependent coupling factors
+        
+        All rates are clipped at ClipRate (default 6000/ms) to prevent
+        numerical instability.
+        """
         if not hasattr(self, 'ClipRate') or self.ClipRate is None:
             self.ClipRate = 1000
         
@@ -1457,7 +1541,13 @@ class AnticonvulsantMarkovModel:
         self._update_scalar_rates()
 
     def _update_scalar_rates(self):
-        """Update scalar rates for current voltage."""
+        """
+        Extract scalar rate values at the current membrane voltage.
+        
+        This private method looks up the transition rates at the current
+        voltage (self.vm) from the pre-calculated rate arrays and stores
+        them as scalar attributes for use in the ODE solver.
+        """
         vidx = np.argmin(np.abs(self.vt - self.vm))
         
         rate_names = ['k12dis', 'k23dis', 'k34dis', 'k45dis', 'k56dis',
@@ -1480,7 +1570,20 @@ class AnticonvulsantMarkovModel:
                 setattr(self, name, 0.0)
 
     def CurrVolt(self):
-        """Calculate I-V relationship (same as original)."""
+        """
+        Calculate the current-voltage relationship using GHK equation.
+        
+        This method computes the single-channel current at each voltage
+        using the Goldman-Hodgkin-Katz (GHK) current equation. The
+        calculation accounts for the sodium gradient and temperature.
+        
+        Updates:
+            self.iscft: Array of single-channel currents at each voltage
+        
+        Notes:
+            Special handling is included for voltages near 0 mV to avoid
+            numerical issues with the GHK equation.
+        """
         self.Tkel = 273.15 + 22.0
         scaled_PNasc = self.PNasc
         
@@ -1502,7 +1605,25 @@ class AnticonvulsantMarkovModel:
             self.iscft[not_zero] = scaled_PNasc * du5_corrected
 
     def EquilOccup(self, vm):
-        """Calculate equilibrium occupancies for 24-state model."""
+        """
+        Calculate equilibrium state occupancies at a given voltage.
+        
+        This method computes the steady-state probability distribution
+        across all 24 states at the specified membrane voltage. It uses
+        the principle of detailed balance to calculate equilibrium
+        occupancies analytically.
+        
+        Parameters:
+            vm (float): Membrane voltage in mV
+            
+        Returns:
+            numpy.ndarray: State probability vector (24 elements) at equilibrium
+            
+        Notes:
+            The calculation accounts for both intrinsic gating equilibria
+            and drug binding equilibria. Drug binding factors depend on
+            the current drug concentration.
+        """
         self.vm = vm
         
         if not hasattr(self, 'k12dis_vec'):
@@ -1581,7 +1702,28 @@ class AnticonvulsantMarkovModel:
         return pop
 
     def NowDerivs(self, t, y):
-        """Calculate derivatives for the 24-state anticonvulsant model."""
+        """
+        Calculate state derivatives for the ODE solver.
+        
+        This method computes dy/dt for all 24 states based on the
+        transition rate matrix Q. It constructs the full Q matrix
+        including intrinsic gating transitions and drug binding/unbinding
+        transitions.
+        
+        Parameters:
+            t (float): Current time (not used, but required by ODE solver)
+            y (numpy.ndarray): Current state probability vector (24 elements)
+            
+        Returns:
+            numpy.ndarray: State derivatives dy/dt (24 elements)
+            
+        Notes:
+            The Q matrix structure:
+            - Q[i,j] = rate from state j to state i (off-diagonal)
+            - Q[i,i] = negative sum of all rates leaving state i (diagonal)
+            
+            Drug-bound open state (state 17) is non-conducting (blocked).
+        """
         vidx = np.searchsorted(self.vt, self.vm)
         vidx = np.clip(vidx, 0, len(self.vt) - 1)
 
@@ -1620,6 +1762,7 @@ class AnticonvulsantMarkovModel:
         # --- Off-diagonal entries: Q[to, from] = rate from state 'from' → state 'to' ---
 
         # Region 1: Drug-Free States (0-11) - Intrinsic Gating
+        # [Matrix construction code remains the same...]
         # State 0 (C1)
         Q[0, 1] = k21dis; Q[0, 6] = k71dis
         # State 1 (C2)
@@ -1729,7 +1872,33 @@ class AnticonvulsantMarkovModel:
         return dstdt
 
     def Sweep(self, SwpNo):
-        """Run voltage-clamp sweep for 24-state model."""
+        """
+        Execute a single voltage-clamp sweep from the protocol.
+        
+        This method simulates the response to a voltage protocol sweep,
+        solving the differential equations for state evolution and
+        calculating the resulting current trace.
+        
+        Parameters:
+            SwpNo (int): Sweep number to execute (0-indexed)
+            
+        Returns:
+            tuple: (time_points, current_trace)
+                - time_points: Time vector from ODE solver
+                - current_trace: Simulated current trace
+                
+        Updates:
+            self.SimSwp: Complete current trace
+            self.SimOp: Open state probability over time
+            self.SimIn: Inactivated state probability over time
+            self.SimAv: Available (closed) state probability over time
+            self.SimDrugBound: Drug-bound fraction over time
+            self.time: Time vector for the sweep
+            
+        Notes:
+            Uses scipy's solve_ivp with LSODA method for efficient
+            integration of the stiff ODE system.
+        """
         if SwpNo >= self.SwpSeq.shape[1] or SwpNo < 0:
             raise ValueError(f"Invalid sweep number {SwpNo}")
         
@@ -1820,7 +1989,17 @@ class AnticonvulsantMarkovModel:
         return sol.t, self.SimSwp
     
     def _store_results_24(self, idx, t):
-        """Store results for single time point (24-state version)."""
+        """
+        Store simulation results for a single time point (24-state model).
+        
+        This private method calculates and stores the current and state
+        probabilities at a single time point. Only drug-free open channels
+        contribute to current as drug-bound channels are blocked.
+        
+        Parameters:
+            idx (int): Index in result arrays
+            t (float): Current time (not used but kept for compatibility)
+        """
         vidx = np.searchsorted(self.vt, self.vm)
         vidx = np.clip(vidx, 0, len(self.vt) - 1)
         
@@ -1842,7 +2021,17 @@ class AnticonvulsantMarkovModel:
         self.SimDrugBound[idx] = np.sum(self.pop[12:24])  # All drug-bound states
     
     def _store_results_vectorized_24(self, indices, batch_states, voltage):
-        """Store batch results (24-state version)."""
+        """
+        Store simulation results for multiple time points (vectorized).
+        
+        This private method efficiently processes and stores results for
+        multiple time points simultaneously using numpy vectorization.
+        
+        Parameters:
+            indices (numpy.ndarray): Indices in result arrays
+            batch_states (numpy.ndarray): State probabilities (n_points x 24)
+            voltage (float): Membrane voltage for this epoch
+        """
         if len(indices) == 0:
             return
         
@@ -1871,7 +2060,25 @@ class AnticonvulsantMarkovModel:
         
     def create_default_protocol(self, target_voltages=None, holding_potential=-80,
                               holding_duration=98, test_duration=200, tail_duration=2):
-        """Create default protocol identical to 12-state model."""
+        """
+        Create a standard voltage-clamp protocol for activation curves.
+        
+        This method creates a multi-sweep protocol with test pulses to
+        different voltages, suitable for measuring activation curves and
+        peak current-voltage relationships.
+        
+        Parameters:
+            target_voltages (list or None): Test pulse voltages in mV.
+                Default: [30, 0, -20, -30, -40, -50, -60]
+            holding_potential (float): Holding voltage in mV. Default: -80
+            holding_duration (float): Initial holding period in ms. Default: 98
+            test_duration (float): Test pulse duration in ms. Default: 200
+            tail_duration (float): Final recovery period in ms. Default: 2
+            
+        Updates:
+            self.SwpSeq: Protocol array defining all sweeps
+            self.NumSwps: Number of sweeps in protocol
+        """
         self.BsNm = "AnticonvulsantProtocol"
         
         if target_voltages is None:
@@ -1903,28 +2110,31 @@ class AnticonvulsantMarkovModel:
         """
         Create a protocol optimized to show anticonvulsant effects on inactivation.
         
-        Protocol:
-        1. Hold at -80 mV (resting) - 200 ms for equilibration
-        2. Long step to inactivating voltage (causes inactivation + drug binding)  
-        3. Brief test pulse to measure available current
-        4. Return to holding potential for recovery
+        This protocol is designed to maximize drug binding during a long
+        inactivating prepulse, followed by a brief test pulse to measure
+        the remaining available current. The 2-second default duration is
+        critical for reaching steady-state drug binding.
         
-        This protocol maximizes drug binding during the long inactivating step.
-        
-        Args:
+        Parameters:
             inactivating_voltage (float): Voltage for inactivating prepulse in mV. 
-                Default -20 mV promotes strong inactivation.
-            test_voltage (float): Voltage for test pulse in mV. Default 0 mV
-                for maximal channel opening.
+                Default: -20 (promotes strong inactivation)
+            test_voltage (float): Voltage for test pulse in mV. 
+                Default: 0 (maximal channel opening)
             inactivating_duration (float): Duration of inactivating pulse in ms.
-                DEFAULT CHANGED TO 2000 ms (2 seconds) for complete drug equilibration.
-                Kuo 1998 shows drug binding requires >1 second to reach steady state.
-            recovery_duration (float): Final recovery period in ms. Default 100 ms.
+                Default: 2000 (2 seconds for complete drug equilibration)
+                WARNING: Shorter durations will underestimate drug effects!
+            recovery_duration (float): Final recovery period in ms. Default: 100
         
+        Protocol structure:
+            1. Hold at -80 mV (200 ms) - equilibration
+            2. Long step to inactivating voltage - promotes drug binding
+            3. Brief test pulse (5 ms) - measures available current
+            4. Return to holding potential - recovery
+            
         Notes:
-            - The 2-second default inactivating duration is CRITICAL for observing
-            anticonvulsant effects. Shorter durations will underestimate drug potency.
-            - Initial holding period increased to 200 ms for better equilibration.
+            Kuo 1998 shows drug binding requires >1 second to reach
+            steady state. The 2-second default is essential for accurate
+            measurement of anticonvulsant potency.
         """
         self.BsNm = "InactivationProtocol"
         
@@ -1965,51 +2175,42 @@ class AnticonvulsantMarkovModel:
         setattr(self, f"SwpSeq{self.BsNm}", self.SwpSeq.copy())
         self.CurrVolt()
 
-
     def create_recovery_protocol(self, target_recovery_times=None, holding_potential=-80,
                         inactivating_voltage=-20, test_voltage=0,
                         holding_duration=200, inactivating_duration=2000, 
                         test_duration=20, tail_duration=100):
         """
-        Create recovery from inactivation protocol for measuring anticonvulsant drug effects.
+        Create a protocol to measure recovery from drug-induced inactivation.
         
-        This protocol measures the time course of recovery from inactivation, which is
-        the primary mechanism by which anticonvulsant drugs reduce sodium channel availability.
+        This protocol applies a long inactivating pulse to promote drug
+        binding, then varies the recovery interval before a test pulse.
+        This reveals the slow recovery kinetics characteristic of
+        anticonvulsant unbinding.
         
-        Protocol structure for each sweep:
-        1. Hold at holding_potential (equilibration)
-        2. Inactivating pulse to inactivating_voltage (allows drug binding to reach steady state)
-        3. Recovery interval at holding_potential (VARIABLE duration - varies between sweeps)
-        4. Test pulse to test_voltage (measures recovered current)
-        5. Return to holding_potential (tail period)
-        
-        Args:
-            target_recovery_times (list, optional): Recovery intervals in ms. 
-                Defaults to [1, 3, 10, 30, 100, 300, 1000] for comprehensive kinetics.
-            holding_potential (float, optional): Resting voltage in mV. Defaults to -80.
-            inactivating_voltage (float, optional): Voltage for inactivating pulse in mV. 
-                Defaults to -20 (promotes inactivation and drug binding).
-            test_voltage (float, optional): Voltage for test pulse in mV. Defaults to 0
-                (promotes channel opening to measure recovery).
-            holding_duration (float, optional): Initial holding duration in ms. 
-                DEFAULT CHANGED TO 200 ms for better equilibration (was 50 ms).
-            inactivating_duration (float, optional): Duration of inactivating pulse in ms. 
-                DEFAULT CHANGED TO 2000 ms for complete drug binding (was 1000 ms).
-            test_duration (float, optional): Duration of test pulse in ms. Defaults to 20
-                (brief to minimize further inactivation).
-            tail_duration (float, optional): Final holding duration in ms. 
-                Defaults to 100 ms (increased from 50 ms).
-        
-        Returns:
-            None. Sets self.SwpSeq and updates self.NumSwps.
+        Parameters:
+            target_recovery_times (list or None): Recovery intervals in ms.
+                Default: [1, 3, 10, 30, 100, 300, 1000] (log spacing)
+            holding_potential (float): Recovery voltage in mV. Default: -80
+            inactivating_voltage (float): Inactivating voltage in mV. Default: -20
+            test_voltage (float): Test pulse voltage in mV. Default: 0
+            holding_duration (float): Initial equilibration in ms. Default: 200
+            inactivating_duration (float): Inactivating pulse in ms. Default: 2000
+            test_duration (float): Test pulse duration in ms. Default: 20
+            tail_duration (float): Final recovery period in ms. Default: 100
+            
+        Protocol structure (per sweep):
+            1. Initial holding period
+            2. Long inactivating pulse (drug binding)
+            3. Variable recovery interval at holding potential
+            4. Test pulse to measure recovery
+            5. Final tail period
             
         Notes:
-            - This protocol is designed to replicate Kuo et al. (1998) methodology
-            - Drug effects are measured as slowed recovery kinetics
-            - The 2-second inactivating pulse ensures drug binding reaches equilibrium
-            - With 25 μM LTG, expect ~30x slower recovery (τ ~200 ms vs ~7 ms control)
+            Recovery time constants differ between drugs:
+            - CBZ: ~189 ms
+            - LTG: ~321 ms (slowest)
+            - DPH: ~189 ms
         """
-        
         self.BsNm = "RecoveryFromInactivation"
         
         # Default recovery times: logarithmic spacing from 1 ms to 1000 ms
@@ -2061,7 +2262,6 @@ class AnticonvulsantMarkovModel:
         # Update current-voltage relationships
         self.CurrVolt()
 
-    # Additional helper method for creating a full steady-state inactivation curve protocol
     def create_steady_state_inactivation_protocol(self, test_voltages=None, 
                                                 holding_potential=-120,
                                                 prepulse_duration=2000,
@@ -2069,29 +2269,33 @@ class AnticonvulsantMarkovModel:
                                                 test_pulse_duration=5,
                                                 recovery_duration=100):
         """
-        Create a complete steady-state inactivation protocol for anticonvulsant characterization.
+        Create a protocol for steady-state inactivation curves.
         
-        This protocol applies a series of long prepulses to different voltages, followed
-        by a test pulse to measure channel availability. Critical for measuring the
-        voltage-dependent effects of anticonvulsant drugs.
+        This protocol varies the prepulse voltage to achieve different
+        levels of steady-state inactivation, then applies a standard
+        test pulse. The resulting curve shows voltage-dependent channel
+        availability and the shift caused by drug binding.
         
-        Args:
-            test_voltages (array-like, optional): Prepulse voltages in mV.
-                Defaults to [-120, -110, -100, -90, -80, -70, -60, -50, -40, -30, -20].
-            holding_potential (float, optional): Initial holding voltage in mV. 
-                Defaults to -120 (fully available).
-            prepulse_duration (float, optional): Duration of conditioning prepulse in ms.
-                Defaults to 2000 ms (2 seconds) for complete drug equilibration.
-            test_pulse_voltage (float, optional): Test pulse voltage in mV. Defaults to 0.
-            test_pulse_duration (float, optional): Test pulse duration in ms. Defaults to 5.
-            recovery_duration (float, optional): Recovery period in ms. Defaults to 100.
-        
+        Parameters:
+            test_voltages (numpy.ndarray or None): Prepulse voltages in mV.
+                Default: -120 to -20 mV in 5 mV steps
+            holding_potential (float): Initial holding voltage in mV. Default: -120
+            prepulse_duration (float): Prepulse duration in ms. Default: 2000
+            test_pulse_voltage (float): Test voltage in mV. Default: 0
+            test_pulse_duration (float): Test duration in ms. Default: 5
+            recovery_duration (float): Final recovery in ms. Default: 100
+            
+        Protocol structure (per sweep):
+            1. Initial holding at very negative potential
+            2. Long prepulse at variable voltage
+            3. Brief test pulse at depolarized potential
+            4. Recovery period
+            
         Notes:
-            - The 2-second prepulse is ESSENTIAL for accurate drug characterization
-            - Expect ~15 mV leftward shift with 25 μM LTG
-            - Plot normalized peak currents vs prepulse voltage and fit with Boltzmann
+            The 2-second prepulse duration ensures steady-state drug
+            binding at each voltage. Shorter durations will not reveal
+            the full magnitude of the drug-induced shift.
         """
-        
         self.BsNm = "SteadyStateInactivation"
         
         if test_voltages is None:
@@ -2131,19 +2335,3 @@ class AnticonvulsantMarkovModel:
         
         setattr(self, f"SwpSeq{self.BsNm}", self.SwpSeq.copy())
         self.CurrVolt()
-    
-    def set_drug_concentration(self, concentration):
-        """Set anticonvulsant concentration and update all dependent rates."""        
-        self.drug_concentration = concentration
-        self._update_drug_rates()
-        
-        # Recalculate equilibrium with new concentration
-        if hasattr(self, 'vm'):
-            self.pop = self.EquilOccup(self.vm)
-
-    def set_drug_type(self, drug_type):
-        """Change drug type and reinitialize parameters."""
-        self.drug_type = drug_type.upper()
-        old_concentration = self.drug_concentration
-        self.init_parameters()
-        self.set_drug_concentration(old_concentration)
