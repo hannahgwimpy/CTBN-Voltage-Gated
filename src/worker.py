@@ -1,8 +1,8 @@
 # worker.py
 import gc
 import numpy as np
-from ctbn_markov import CTBNMarkovModel
-from legacy_markov import MarkovModel
+from ctbn_markov import CTBNMarkovModel, AnticonvulsantCTBNMarkovModel
+from legacy_markov import MarkovModel, AnticonvulsantMarkovModel
 from legacy_hh import HHModel
 
 def run_single_sweep(args):
@@ -60,16 +60,22 @@ def run_single_sweep(args):
         # Determine model type based on parameters
         is_hh_model = parameters.get('is_hh_model', False)
         use_ctbn = parameters.get('use_ctbn', False)
+        is_anticonvulsant_model = parameters.get('is_anticonvulsant_model', False)
 
         if is_hh_model:
             model = HHModel()
+        elif is_anticonvulsant_model:
+            if use_ctbn:
+                model = AnticonvulsantCTBNMarkovModel()
+            else:
+                model = AnticonvulsantMarkovModel()
         elif use_ctbn:
-            model = CTBNMarkovModel()  # Using the compatibility class
+            model = CTBNMarkovModel()
         else:
             model = MarkovModel()
 
         # Remove model type flags from parameters
-        model_flags = ['is_hh_model', 'use_ctbn']
+        model_flags = ['is_hh_model', 'use_ctbn', 'is_anticonvulsant_model']
         parameters = {k: v for k, v in parameters.items() if k not in model_flags}
 
         # Set parameters
@@ -125,16 +131,17 @@ def run_single_sweep(args):
             model.NumSwps = num_swps
 
             # Run the sweep and extract step voltage for results
-            step_volt = model_swp[4, sweep_no] if sweep_no < num_swps else 0
+            # The worker model only has one sweep, so we always get the step voltage from index 0.
+            step_volt = model_swp[4, 0]
 
             try:
                 # Run the sweep - CTBNMarkovModel Sweep method no longer takes use_direct_update parameter
+                # The model instance in the worker only knows about a single sweep protocol,
+                # so we must always call Sweep with index 0, regardless of model type.
                 if isinstance(model, CTBNMarkovModel):
-                    # CTBNMarkovModel.Sweep only takes sweep number
-                    model.Sweep(sweep_no)
+                    model.Sweep(0)
                 else:
-                    # Legacy models use the original Sweep method
-                    model.Sweep(sweep_no)
+                    model.Sweep(0)
 
                 # Extract the peak current from SimSwp (should be negative for sodium channels)
                 if hasattr(model, 'SimSwp'):
@@ -149,16 +156,13 @@ def run_single_sweep(args):
                     min_current = np.min(model.SimSwp)
                     max_current = np.max(model.SimSwp)
 
-                    # Sanity check - if current looks suspiciously like voltage, warn
-                    if abs(min_current - model.vm) < 1.0 and abs(max_current - model.vm) < 1.0:
-                        print(f"WARNING: Current values look like voltage values for sweep {sweep_no}")
-
                 # Make sure we're returning current, not command voltage
                 return {
                     'sweep_no': sweep_no,
                     'sim_swp': model.SimSwp.copy() if hasattr(model, 'SimSwp') else np.array([]),
                     'step_volt': step_volt,
-                    'time': np.arange(len(model.SimSwp)) * 0.005 if hasattr(model, 'SimSwp') else np.array([])
+                    'time': np.arange(len(model.SimSwp)) * 0.005 if hasattr(model, 'SimSwp') else np.array([]),
+                    'protocol': swp_seq[0]
                 }
             except Exception as e:
                 print(f"Error running sweep {sweep_no}: {str(e)}")

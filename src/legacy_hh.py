@@ -582,3 +582,237 @@ class HHModel:
         self.NumSwps = num_sweeps
         self.SimSwp = np.zeros(total_samples)
         self.time = np.arange(total_samples) * self.sampint
+    
+    def create_inactivation_protocol(self, inactivating_voltage=-20, test_voltage=0, 
+                                inactivating_duration=2000, recovery_duration=100):
+        """
+        Create a protocol optimized to show anticonvulsant effects on inactivation.
+        
+        Protocol:
+        1. Hold at -80 mV (resting) - 200 ms for equilibration
+        2. Long step to inactivating voltage (causes inactivation + drug binding)  
+        3. Brief test pulse to measure available current
+        4. Return to holding potential for recovery
+        
+        This protocol maximizes drug binding during the long inactivating step.
+        
+        Args:
+            inactivating_voltage (float): Voltage for inactivating prepulse in mV. 
+                Default -20 mV promotes strong inactivation.
+            test_voltage (float): Voltage for test pulse in mV. Default 0 mV
+                for maximal channel opening.
+            inactivating_duration (float): Duration of inactivating pulse in ms.
+                DEFAULT CHANGED TO 2000 ms (2 seconds) for complete drug equilibration.
+                Kuo 1998 shows drug binding requires >1 second to reach steady state.
+            recovery_duration (float): Final recovery period in ms. Default 100 ms.
+        
+        Notes:
+            - The 2-second default inactivating duration is CRITICAL for observing
+            anticonvulsant effects. Shorter durations will underestimate drug potency.
+            - Initial holding period increased to 200 ms for better equilibration.
+        """
+        self.BsNm = "InactivationProtocol"
+        
+        # Create single sweep protocol
+        self.NumSwps = 1
+        self.SwpSeq = np.zeros((10, 1))  # Need more rows for 4 epochs
+        
+        sampint = 0.005  # 5 μs sampling interval
+        
+        # INCREASED holding duration for better equilibration
+        holding_duration = 200  # ms (increased from 98 ms)
+        holding_samples = int(holding_duration / sampint)
+        
+        # Convert durations to samples
+        inactivating_samples = int(inactivating_duration / sampint)  
+        test_samples = int(5 / sampint)  # 5 ms test pulse (brief to avoid further inactivation)
+        recovery_samples = int(recovery_duration / sampint)
+        
+        # 4 epochs: holding, inactivating pulse, test pulse, recovery
+        self.SwpSeq[0, 0] = 4
+        
+        # Epoch 1: Initial holding for equilibration
+        self.SwpSeq[2, 0] = -80  # holding potential
+        self.SwpSeq[3, 0] = holding_samples
+        
+        # Epoch 2: Long inactivating pulse (where drug binding occurs)
+        self.SwpSeq[4, 0] = inactivating_voltage 
+        self.SwpSeq[5, 0] = holding_samples + inactivating_samples
+        
+        # Epoch 3: Brief test pulse to measure available current
+        self.SwpSeq[6, 0] = test_voltage
+        self.SwpSeq[7, 0] = holding_samples + inactivating_samples + test_samples
+        
+        # Epoch 4: Recovery period
+        self.SwpSeq[8, 0] = -80
+        self.SwpSeq[9, 0] = holding_samples + inactivating_samples + test_samples + recovery_samples
+        
+        setattr(self, f"SwpSeq{self.BsNm}", self.SwpSeq.copy())
+        self.CurrVolt()
+
+
+    def create_recovery_protocol(self, target_recovery_times=None, holding_potential=-80,
+                        inactivating_voltage=-20, test_voltage=0,
+                        holding_duration=200, inactivating_duration=2000, 
+                        test_duration=20, tail_duration=100):
+        """
+        Create recovery from inactivation protocol for measuring anticonvulsant drug effects.
+        
+        This protocol measures the time course of recovery from inactivation, which is
+        the primary mechanism by which anticonvulsant drugs reduce sodium channel availability.
+        
+        Protocol structure for each sweep:
+        1. Hold at holding_potential (equilibration)
+        2. Inactivating pulse to inactivating_voltage (allows drug binding to reach steady state)
+        3. Recovery interval at holding_potential (VARIABLE duration - varies between sweeps)
+        4. Test pulse to test_voltage (measures recovered current)
+        5. Return to holding_potential (tail period)
+        
+        Args:
+            target_recovery_times (list, optional): Recovery intervals in ms. 
+                Defaults to [1, 3, 10, 30, 100, 300, 1000] for comprehensive kinetics.
+            holding_potential (float, optional): Resting voltage in mV. Defaults to -80.
+            inactivating_voltage (float, optional): Voltage for inactivating pulse in mV. 
+                Defaults to -20 (promotes inactivation and drug binding).
+            test_voltage (float, optional): Voltage for test pulse in mV. Defaults to 0
+                (promotes channel opening to measure recovery).
+            holding_duration (float, optional): Initial holding duration in ms. 
+                DEFAULT CHANGED TO 200 ms for better equilibration (was 50 ms).
+            inactivating_duration (float, optional): Duration of inactivating pulse in ms. 
+                DEFAULT CHANGED TO 2000 ms for complete drug binding (was 1000 ms).
+            test_duration (float, optional): Duration of test pulse in ms. Defaults to 20
+                (brief to minimize further inactivation).
+            tail_duration (float, optional): Final holding duration in ms. 
+                Defaults to 100 ms (increased from 50 ms).
+        
+        Returns:
+            None. Sets self.SwpSeq and updates self.NumSwps.
+            
+        Notes:
+            - This protocol is designed to replicate Kuo et al. (1998) methodology
+            - Drug effects are measured as slowed recovery kinetics
+            - The 2-second inactivating pulse ensures drug binding reaches equilibrium
+            - With 25 μM LTG, expect ~30x slower recovery (τ ~200 ms vs ~7 ms control)
+        """
+        
+        self.BsNm = "RecoveryFromInactivation"
+        
+        # Default recovery times: logarithmic spacing from 1 ms to 1000 ms
+        if target_recovery_times is None:
+            target_recovery_times = [1, 3, 10, 30, 100, 300, 1000]
+        
+        target_recovery_times = np.array(target_recovery_times)
+        self.NumSwps = len(target_recovery_times)
+        
+        # Initialize protocol array - need 12 rows for 5 epochs (2 rows per epoch: voltage, time)
+        self.SwpSeq = np.zeros((12, self.NumSwps))
+        
+        # Convert durations to sample points (5 μs sampling interval)
+        sampint = 0.005  # 5 μs
+        holding_samples = int(holding_duration / sampint)
+        inactivating_samples = int(inactivating_duration / sampint)
+        test_samples = int(test_duration / sampint)
+        tail_samples = int(tail_duration / sampint)
+        
+        # Convert recovery times to samples (this varies per sweep)
+        recovery_samples = (target_recovery_times / sampint).astype(int)
+        
+        # Set up protocol for each sweep
+        self.SwpSeq[0, :] = 5  # 5 epochs per sweep
+        
+        # Epoch 1: Initial holding period at holding_potential
+        self.SwpSeq[2, :] = holding_potential
+        self.SwpSeq[3, :] = holding_samples
+        
+        # Epoch 2: Inactivating pulse at inactivating_voltage
+        self.SwpSeq[4, :] = inactivating_voltage
+        self.SwpSeq[5, :] = holding_samples + inactivating_samples
+        
+        # Epoch 3: Recovery interval at holding_potential (VARIABLE duration)
+        self.SwpSeq[6, :] = holding_potential
+        self.SwpSeq[7, :] = holding_samples + inactivating_samples + recovery_samples
+        
+        # Epoch 4: Test pulse at test_voltage
+        self.SwpSeq[8, :] = test_voltage
+        self.SwpSeq[9, :] = holding_samples + inactivating_samples + recovery_samples + test_samples
+        
+        # Epoch 5: Tail period at holding_potential
+        self.SwpSeq[10, :] = holding_potential
+        self.SwpSeq[11, :] = holding_samples + inactivating_samples + recovery_samples + test_samples + tail_samples
+        
+        # Store protocol with descriptive name
+        setattr(self, f"SwpSeq{self.BsNm}", self.SwpSeq.copy())
+        
+        # Update current-voltage relationships
+        self.CurrVolt()
+
+    # Additional helper method for creating a full steady-state inactivation curve protocol
+    def create_steady_state_inactivation_protocol(self, test_voltages=None, 
+                                                holding_potential=-120,
+                                                prepulse_duration=2000,
+                                                test_pulse_voltage=0,
+                                                test_pulse_duration=5,
+                                                recovery_duration=100):
+        """
+        Create a complete steady-state inactivation protocol for anticonvulsant characterization.
+        
+        This protocol applies a series of long prepulses to different voltages, followed
+        by a test pulse to measure channel availability. Critical for measuring the
+        voltage-dependent effects of anticonvulsant drugs.
+        
+        Args:
+            test_voltages (array-like, optional): Prepulse voltages in mV.
+                Defaults to [-120, -110, -100, -90, -80, -70, -60, -50, -40, -30, -20].
+            holding_potential (float, optional): Initial holding voltage in mV. 
+                Defaults to -120 (fully available).
+            prepulse_duration (float, optional): Duration of conditioning prepulse in ms.
+                Defaults to 2000 ms (2 seconds) for complete drug equilibration.
+            test_pulse_voltage (float, optional): Test pulse voltage in mV. Defaults to 0.
+            test_pulse_duration (float, optional): Test pulse duration in ms. Defaults to 5.
+            recovery_duration (float, optional): Recovery period in ms. Defaults to 100.
+        
+        Notes:
+            - The 2-second prepulse is ESSENTIAL for accurate drug characterization
+            - Expect ~15 mV leftward shift with 25 μM LTG
+            - Plot normalized peak currents vs prepulse voltage and fit with Boltzmann
+        """
+        
+        self.BsNm = "SteadyStateInactivation"
+        
+        if test_voltages is None:
+            test_voltages = np.arange(-120, -15, 5)  # -120 to -20 mV in 5 mV steps
+        
+        test_voltages = np.array(test_voltages)
+        self.NumSwps = len(test_voltages)
+        
+        # Initialize protocol array
+        self.SwpSeq = np.zeros((10, self.NumSwps))
+        
+        # Convert to samples
+        sampint = 0.005  # 5 μs
+        holding_samples = int(200 / sampint)  # 200 ms initial holding
+        prepulse_samples = int(prepulse_duration / sampint)
+        test_samples = int(test_pulse_duration / sampint)
+        recovery_samples = int(recovery_duration / sampint)
+        
+        # Set up each sweep
+        self.SwpSeq[0, :] = 4  # 4 epochs per sweep
+        
+        # Epoch 1: Initial holding
+        self.SwpSeq[2, :] = holding_potential
+        self.SwpSeq[3, :] = holding_samples
+        
+        # Epoch 2: Prepulse (voltage varies per sweep)
+        self.SwpSeq[4, :] = test_voltages
+        self.SwpSeq[5, :] = holding_samples + prepulse_samples
+        
+        # Epoch 3: Test pulse
+        self.SwpSeq[6, :] = test_pulse_voltage
+        self.SwpSeq[7, :] = holding_samples + prepulse_samples + test_samples
+        
+        # Epoch 4: Recovery
+        self.SwpSeq[8, :] = holding_potential
+        self.SwpSeq[9, :] = holding_samples + prepulse_samples + test_samples + recovery_samples
+        
+        setattr(self, f"SwpSeq{self.BsNm}", self.SwpSeq.copy())
+        self.CurrVolt()
