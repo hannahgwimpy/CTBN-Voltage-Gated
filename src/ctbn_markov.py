@@ -83,6 +83,7 @@ class CTBNMarkovModel:
         # Calculate rates
         self.update_rates()
         self.CurrVolt()
+        self.state_probs_flat = self.EquilOccup(self.vm)  # Initialize to equilibrium
         self.create_default_protocol()
     
     def init_parameters(self):
@@ -97,37 +98,32 @@ class CTBNMarkovModel:
         physical constants like `F` (Faraday's constant), `Rgc` (gas constant),
         `Tkel` (temperature in Kelvin), and ion concentrations.
         """
-
-        # Activation parameters
-        self.alcoeff = 150      
-        self.alslp = 20           
-        self.btcoeff = 3      
-        self.btslp = 20       
-        
+        # Original Kuo-Bean parameters
+        self.alcoeff = 20     
+        self.alslp = 40           
+        self.btcoeff = 0.3    
+        self.btslp = 18.5      
+    
         # Inactivation parameters 
-        self.ConCoeff = 0.005
-        self.CoffCoeff = 0.5
-        self.ConSlp = 1e8       
-        self.CoffSlp = 1e8      
+        self.ConCoeff = 0.004    # C_off (completely deactivated state)
+        self.CoffCoeff = 4.5     # C_on (completely deactivated state)
+        self.ConSlp = 1e8        # Large value = voltage-independent
+        self.CoffSlp = 1e8       # Large value = voltage-independent
         
         # Transition rates between states
-        self.gmcoeff = 150      
-        self.gmslp = 1e12       
-        self.dlcoeff = 40       
-        self.dlslp = 1e12       
-        self.epcoeff = 1.75   
-        self.epslp = 1e12       
-        self.ztcoeff = 0.03    
-        self.ztslp = 25       
+        self.gmcoeff = 50      
+        self.gmslp = 100       
+        self.dlcoeff = 0.8
+        self.dlslp = 6
         
         # Open state transitions
-        self.OpOnCoeff = 0.75   
-        self.OpOffCoeff = 0.005 
-        self.ConHiCoeff = 0.75   
-        self.CoffHiCoeff = 0.005
-        self.OpOnSlp = 1e8      
-        self.OpOffSlp = 1e8     
-        
+        self.OpOnCoeff = 4       # O_on (open state)
+        self.OpOffCoeff = 0.008  # O_off (open state)
+        self.ConHiCoeff = 4      # Same as OpOnCoeff (O_on)
+        self.CoffHiCoeff = 0.008 # Same as OpOffCoeff (O_off)
+        self.OpOnSlp = 1e8       # Large value = voltage-independent
+        self.OpOffSlp = 1e8      # Large value = voltage-independent
+
         # Initialize derived parameters
         self.konlo = self.kofflo = self.konhi = self.koffhi = 0
         self.konop = self.koffop = self.kdlo = self.kdhi = 0
@@ -138,15 +134,14 @@ class CTBNMarkovModel:
         
         # Other model parameters
         self.numchan = 1
-        self.cm = 30
-        self.F = 96480
+        self.F = 96485
         self.Rgc = 8314
-        self.Tkel = 298
-        self.Nao, self.Nai = 155, 15
+        self.Tkel = 295
+        self.Nao, self.Nai = 150, 15
         self.ClipRate = 6000
         
-        # Current scaling factor
-        self.current_scaling = 0.0117
+        # Current scaling factor to match HH model
+        self.current_scaling = 0.0125
         
         self.PNasc = 1e-5
 
@@ -195,6 +190,11 @@ class CTBNMarkovModel:
         # Inactivation rates for each activation level (6 levels)
         self.inact_on_rates = np.zeros((num_v, 6))   # 0→1 (inactivation)
         self.inact_off_rates = np.zeros((num_v, 6))  # 1→0 (recovery)
+
+        # Initialize potentially missing rate vectors (e.g., for state 13 transitions)
+        # These might be populated by specific features/extensions later if num_states is adjusted.
+        self.k613dis_vec = np.zeros(num_v)
+        self.k136dis_vec = np.zeros(num_v)
         
         # Calculate initial rates
         self.update_rates()
@@ -280,12 +280,6 @@ class CTBNMarkovModel:
         # Open state (a = 5)
         self.inact_on_rates[:, 5] = np.minimum(konop, self.ClipRate)
         self.inact_off_rates[:, 5] = np.minimum(koffop, self.ClipRate)
-        
-        # Drug-bound transitions - vectorized
-        emt = self.epcoeff * np.exp(vt / self.epslp) * activation_scale
-        zmt = self.ztcoeff * np.exp(-vt / self.ztslp) * deactivation_scale
-        self.k613dis_vec = np.minimum(emt, self.ClipRate)
-        self.k136dis_vec = np.minimum(zmt, self.ClipRate)
 
     def CurrVolt(self):
         """
@@ -301,10 +295,6 @@ class CTBNMarkovModel:
         on the probability of the channel being in the open state.
         Handles potential division by zero if vm is exactly 0 mV.
         """
-
-        # Set temperature in Kelvin to fixed reference value (22°C)
-        self.Tkel = 273.15 + 22.0
-        
         # No temperature scaling for permeability
         scaled_PNasc = self.PNasc
         
@@ -402,12 +392,8 @@ class CTBNMarkovModel:
         eq_probs_flat[:6] = rel_prob_A_I0 * prob_I0    # (A,I=0) states
         eq_probs_flat[6:12] = rel_prob_A_I1 * prob_I1  # (A,I=1) states
         
-        # Convert to legacy format for compatibility
-        pop = np.zeros(20)
-        pop[1:7] = eq_probs_flat[:6]    # C1-C5, O (I=0)
-        pop[7:13] = eq_probs_flat[6:12] # I1-I6 (I=1)
-        
-        return pop
+        # eq_probs_flat is the 12-state equilibrium probability vector
+        return eq_probs_flat
 
     def NowDerivs(self, t, y):
         """
@@ -561,6 +547,47 @@ class CTBNMarkovModel:
             'k136': self.k136dis_vec[vidx]
         }
 
+    def _update_scalar_rates(self):
+        """
+        Updates scalar rate attributes based on the current membrane potential `self.vm`.
+
+        This method fetches a dictionary of all relevant transition rates
+        at the current `self.vm` by calling `self._get_rates_at_vm(self.vm)`.
+        It then iterates through this dictionary and sets corresponding scalar
+        attributes on the instance (e.g., self.fwd_A0, self.bwd_A0, self.inact_on, etc.)
+        to the fetched values.
+
+        This ensures that the model has readily accessible scalar attributes
+        representing the rates at the current `self.vm`, which can be useful for
+        debugging or for external scripts that might inspect these values.
+        It uses the model's own internal mechanism for determining rates at a
+        given voltage.
+        """
+        if not hasattr(self, 'vm'):
+            # This should ideally not happen if the model is correctly initialized.
+            print(f"Warning: CTBNMarkovModel instance (id: {id(self)}) " +
+                  "does not have 'vm' attribute when _update_scalar_rates is called. " +
+                  "Rates cannot be updated.")
+            return
+
+        # _get_rates_at_vm relies on self.vt and various _vec rate arrays being initialized.
+        # Check for one of the primary rate arrays like 'fwd_rates_I0'.
+        if not hasattr(self, 'vt') or not hasattr(self, 'fwd_rates_I0'):
+            print(f"Warning: CTBNMarkovModel instance (id: {id(self)}) may not be fully initialized " +
+                  "(missing self.vt or vectorized rate arrays like self.fwd_rates_I0) " +
+                  "when _update_scalar_rates is called. Proceeding, but _get_rates_at_vm might fail.")
+
+        try:
+            rates_at_vm = self._get_rates_at_vm(self.vm)
+            for rate_name, rate_value in rates_at_vm.items():
+                setattr(self, rate_name, rate_value)
+        except AttributeError as e:
+            # This might occur if _get_rates_at_vm attempts to access a non-existent
+            # vectorized rate array due to incomplete initialization.
+            print(f"Error in CTBNMarkovModel._update_scalar_rates for vm={self.vm}: " +
+                  f"Failed to get or set rates. Underlying error: {e}")
+            raise # Re-raise the error to make it visible.
+
     def Sweep(self, SwpNo):
         """
         Runs a single voltage-clamp sweep simulation.
@@ -634,9 +661,9 @@ class CTBNMarkovModel:
         self.CurrVolt()
         eq_pop = self.EquilOccup(self.vm)
         
-        # Convert legacy equilibrium to CTBN flat format
-        self.state_probs_flat[:6] = eq_pop[1:7]    # C1-C5, O (I=0)
-        self.state_probs_flat[6:12] = eq_pop[7:13] # I1-I6 (I=1)
+        # eq_pop is already in the 12-state CTBN flat format from self.EquilOccup
+        self.state_probs_flat[:6] = eq_pop[:6]    # States 0-5 (e.g., (A0,I0) to (A5,I0))
+        self.state_probs_flat[6:12] = eq_pop[6:12] # States 6-11 (e.g., (A0,I1) to (A5,I1))
         
         # Store initial values
         self._store_ctbn_results(0, 0)
@@ -1093,7 +1120,7 @@ class CTBNMarkovModel:
         setattr(self, f"SwpSeq{self.BsNm}", self.SwpSeq.copy())
         self.CurrVolt()
 
-class AnticonvulsantCTBNMarkovModel:
+class AnticonvulsantCTBNMarkovModel(CTBNMarkovModel):
     """
     24-state Continuous-Time Bayesian Network (CTBN) model for voltage-gated sodium channels 
     with anticonvulsant drug binding.
@@ -1140,7 +1167,7 @@ class AnticonvulsantCTBNMarkovModel:
         4. Pre-allocated work arrays to avoid memory allocation
     """
     
-    def __init__(self, drug_concentration=0.0, drug_type='mixed'):
+    def __init__(self, drug_concentration=0.0, drug_type='DPH'):
         """
         Initialize the CTBN anticonvulsant model.
         
@@ -1181,6 +1208,7 @@ class AnticonvulsantCTBNMarkovModel:
         # Calculate rates and currents
         self.update_rates()
         self.CurrVolt()
+        self.state_probs_flat = self.EquilOccup(self.vm)  # Initialize to equilibrium
         self.create_default_protocol()
 
     def set_drug_type(self, drug_type):
@@ -1249,36 +1277,32 @@ class AnticonvulsantCTBNMarkovModel:
            
         The method automatically selects appropriate drug parameters based
         on self.drug_type and calculates derived quantities.
-        """
-        # Activation parameters
-        self.alcoeff = 150      
-        self.alslp = 20           
-        self.btcoeff = 3      
-        self.btslp = 20       
-        
+        """       
+        # Original Kuo-Bean parameters
+        self.alcoeff = 20     
+        self.alslp = 40           
+        self.btcoeff = 0.3    
+        self.btslp = 18.5      
+    
         # Inactivation parameters 
-        self.ConCoeff = 0.005
-        self.CoffCoeff = 0.5
-        self.ConSlp = 1e8       
-        self.CoffSlp = 1e8      
+        self.ConCoeff = 0.004    # C_off (completely deactivated state)
+        self.CoffCoeff = 4.5     # C_on (completely deactivated state)
+        self.ConSlp = 1e8        # Large value = voltage-independent
+        self.CoffSlp = 1e8       # Large value = voltage-independent
         
         # Transition rates between states
-        self.gmcoeff = 150      
-        self.gmslp = 1e12       
-        self.dlcoeff = 40       
-        self.dlslp = 1e12       
-        self.epcoeff = 1.75   
-        self.epslp = 1e12       
-        self.ztcoeff = 0.03    
-        self.ztslp = 25       
+        self.gmcoeff = 50      
+        self.gmslp = 100       
+        self.dlcoeff = 0.8
+        self.dlslp = 6  
         
         # Open state transitions
-        self.OpOnCoeff = 0.75   
-        self.OpOffCoeff = 0.005 
-        self.ConHiCoeff = 0.75   
-        self.CoffHiCoeff = 0.005
-        self.OpOnSlp = 1e8      
-        self.OpOffSlp = 1e8      
+        self.OpOnCoeff = 4       # O_on (open state)
+        self.OpOffCoeff = 0.008  # O_off (open state)
+        self.ConHiCoeff = 4      # Same as OpOnCoeff (O_on)
+        self.CoffHiCoeff = 0.008 # Same as OpOffCoeff (O_off)
+        self.OpOnSlp = 1e8       # Large value = voltage-independent
+        self.OpOffSlp = 1e8      # Large value = voltage-independent
         
         # Calculate alfac and btfac as in original code
         self.alfac = np.sqrt(np.sqrt(self.ConHiCoeff / self.ConCoeff))
@@ -1287,41 +1311,42 @@ class AnticonvulsantCTBNMarkovModel:
         # Drug-specific binding affinities from Kuo 1998 Table/Results
         self.drug_params = {
             'CBZ': {
-                'KI_inactivated': 25.0,  # μM - from Kuo 1998 steady-state analysis
-                'recovery_tau': 189.0,   # ms - average of 180-197 ms from kinetic fits
-                'k_off': 1.0 / 189.0     # /ms - calculated from recovery time constant
+                'KI_inactivated': 25.0,  # μM - Kuo 1998 paper analysis (p.714)
+                'recovery_tau': 189.0,   # ms - Consistent with Kuo 1998 Fig 5A (180-197ms)
+                'k_off_base': 1.0 / 189.0,     # /ms - base k_off from recovery time
+                'k_off_scaling': 0.55    # Calibrated to match experimental shifts
             },
             'LTG': {
-                'KI_inactivated': 9.0,   # μM - from Kuo 1998 steady-state analysis  
-                'recovery_tau': 321.0,   # ms - average of 317-325 ms from kinetic fits
-                'k_off': 1.0 / 321.0     # /ms - calculated from recovery time constant
+                'KI_inactivated': 9.0,   # μM - Kuo 1998 paper analysis (p.714)
+                'recovery_tau': 321.0,   # ms - Consistent with Kuo 1998 Fig 5C (317-325ms)
+                'k_off_base': 1.0 / 321.0,     # /ms - base k_off from recovery time
+                'k_off_scaling': 0.42    # Calibrated to match experimental shifts
             },
             'DPH': {
-                'KI_inactivated': 9.0,   # μM - from Kuo 1998 steady-state analysis
-                'recovery_tau': 189.0,   # ms - similar to CBZ based on Kuo 1998 data
-                'k_off': 1.0 / 189.0     # /ms - calculated from recovery time constant
-            },
-            'MIXED': {
-                'KI_inactivated': 15.0,  # μM - average of the three drugs
-                'recovery_tau': 233.0,   # ms - average recovery time
-                'k_off': 1.0 / 233.0     # /ms - calculated from average recovery time
+                'KI_inactivated': 9.0,   # μM - Kuo 1998 paper analysis (p.714)
+                'recovery_tau': 600.0,   # ms - Placeholder reflecting slower kinetics than LTG
+                'k_off_base': 1.0 / 600.0,     # /ms - base k_off from recovery time
+                'k_off_scaling': 0.50    # Calibrated to match experimental shifts
             }
         }
-        
+
         # Select drug-specific parameters
         if self.drug_type in self.drug_params:
             params = self.drug_params[self.drug_type]
         else:
-            print(f"Warning: Unknown drug type '{self.drug_type}', using mixed parameters")
-            params = self.drug_params['MIXED']
+            print(f"Warning: Unknown drug type '{self.drug_type}' (or default 'DPH'), using DPH parameters as fallback.")
+            params = self.drug_params['DPH']
         
         # Set drug-specific parameters
         self.KI_inactivated = params['KI_inactivated']
         self.recovery_tau = params['recovery_tau']
-        self.k_off = params['k_off']
+        self.k_off_base = params['k_off_base']
+
+        # Apply calibrated scaling to k_off to match experimental shifts
+        self.k_off = params['k_off_base'] * params.get('k_off_scaling', 1.0)
         
         # Resting state affinity - 100x weaker than inactivated (Kuo 1998: "mM range")  
-        self.KR_resting = self.KI_inactivated * 100.0
+        self.KR_resting = self.KI_inactivated * 1000.0
         
         # Calculate binding rates: Kd = k_off / k_on, so k_on = k_off / Kd
         self.k_on_inactivated_base = self.k_off / self.KI_inactivated
@@ -1329,13 +1354,12 @@ class AnticonvulsantCTBNMarkovModel:
         
         # Other model parameters (unchanged)
         self.numchan = 1
-        self.cm = 30
-        self.F = 96480
+        self.F = 96485
         self.Rgc = 8314
         self.Tkel = 298
-        self.Nao, self.Nai = 155, 15
+        self.Nao, self.Nai = 150, 15
         self.ClipRate = 6000
-        self.current_scaling = 0.0117
+        self.current_scaling = 0.0125
         self.PNasc = 1e-5
         
         # Update drug-dependent rates
@@ -1361,11 +1385,11 @@ class AnticonvulsantCTBNMarkovModel:
         """
         # Calculate concentration-dependent binding rates
         # k_on_effective = k_on_base × [drug_concentration]
-        self.k_on_resting = self.k_on_resting_base * self.drug_concentration
+        self.k_on_resting = 0
         self.k_on_inactivated = self.k_on_inactivated_base * self.drug_concentration
         
         # k_off is concentration-independent (drug-specific intrinsic unbinding rate)
-        self.k_off_resting = self.k_off
+        self.k_off_resting = 0
         self.k_off_inactivated = self.k_off
     
     def init_waves(self):
@@ -1597,9 +1621,6 @@ class AnticonvulsantCTBNMarkovModel:
         The vectorized implementation provides significant performance gains
         over iterative calculation at each voltage.
         """
-        # Set temperature in Kelvin to fixed reference value (22°C)
-        # Same as parent models for consistency
-        self.Tkel = 273.15 + 22.0
         
         # No temperature scaling for permeability
         scaled_PNasc = self.PNasc
@@ -1998,6 +2019,41 @@ class AnticonvulsantCTBNMarkovModel:
             'drug_off_I1': self.drug_off_rates_I1
         }
 
+    def _update_scalar_rates(self):
+        """
+        Updates scalar rate attributes based on the current membrane potential `self.vm`.
+
+        This method is specific to the AnticonvulsantCTBNMarkovModel.
+        It fetches a dictionary of rate arrays (e.g., 'fwd_flat') at the current `self.vm`
+        by calling its own `self._get_rates_at_vm(self.vm)`.
+        It then sets attributes on the instance corresponding to these rate arrays.
+        This version avoids warnings related to missing base class rate arrays (e.g., fwd_rates_A0_vec).
+        """
+        if not hasattr(self, 'vm'):
+            print(f"Warning: AnticonvulsantCTBNMarkovModel instance (id: {id(self)}) " +
+                  "does not have 'vm' attribute when _update_scalar_rates is called. " +
+                  "Rates cannot be updated.")
+            return
+
+        # Check for its own representative vectorized rate array
+        if not hasattr(self, 'vt') or not hasattr(self, 'fwd_rates_flat'): 
+            print(f"Warning: AnticonvulsantCTBNMarkovModel instance (id: {id(self)}) may not be fully initialized " +
+                  "(missing self.vt or vectorized rate arrays like self.fwd_rates_flat) " +
+                  "when _update_scalar_rates is called. Proceeding, but _get_rates_at_vm might fail.")
+            # Proceeding, as _get_rates_at_vm might still work or raise its own error.
+
+        try:
+            # This will call AnticonvulsantCTBNMarkovModel._get_rates_at_vm
+            rates_at_vm_dict = self._get_rates_at_vm(self.vm) 
+            for rate_name, rate_value_array in rates_at_vm_dict.items():
+                # This will set attributes like self.fwd_flat = array(...), etc.
+                setattr(self, rate_name, rate_value_array) 
+        except AttributeError as e:
+            print(f"Error in AnticonvulsantCTBNMarkovModel._update_scalar_rates for vm={self.vm}: " +
+                  f"Failed to get or set rates. Underlying error: {e}")
+            # Depending on severity, could re-raise. For now, just log.
+            # raise    }
+
     def Sweep(self, SwpNo):
         """
         Execute a voltage-clamp sweep using optimized CTBN computation.
@@ -2274,8 +2330,7 @@ class AnticonvulsantCTBNMarkovModel:
         # Available probability: All states with I=0 (not inactivated)
         # Drug-free available: indices 0-5 (A=0-5, I=0, D=0)
         # Drug-bound available: indices 12-17 (A=0-5, I=0, D=1)
-        available = (np.sum(state_probs_batch[:, 0:6], axis=1) + 
-                    np.sum(state_probs_batch[:, 12:18], axis=1))
+        available = np.sum(state_probs_batch[:, 0:6], axis=1)
         
         # Drug-bound probability: All states with D=1 (anticonvulsant-specific)
         # Drug-bound available: indices 12-17 (A=0-5, I=0, D=1)

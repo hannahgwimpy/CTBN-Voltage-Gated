@@ -77,36 +77,31 @@ class MarkovModel:
     
     def init_parameters(self):
         """Initialize biophysical parameters."""
-        
         # Original Kuo-Bean parameters
-        self.alcoeff = 150      
-        self.alslp = 20           
-        self.btcoeff = 3      
-        self.btslp = 20       
-        
+        self.alcoeff = 20     
+        self.alslp = 40           
+        self.btcoeff = 0.3    
+        self.btslp = 18.5      
+    
         # Inactivation parameters 
-        self.ConCoeff = 0.005
-        self.CoffCoeff = 0.5
-        self.ConSlp = 1e8       
-        self.CoffSlp = 1e8      
+        self.ConCoeff = 0.004    # C_off (completely deactivated state)
+        self.CoffCoeff = 4.5     # C_on (completely deactivated state)
+        self.ConSlp = 1e8        # Large value = voltage-independent
+        self.CoffSlp = 1e8       # Large value = voltage-independent
         
         # Transition rates between states
-        self.gmcoeff = 150      
-        self.gmslp = 1e12       
-        self.dlcoeff = 40       
-        self.dlslp = 1e12       
-        self.epcoeff = 1.75   
-        self.epslp = 1e12       
-        self.ztcoeff = 0.03    
-        self.ztslp = 25       
+        self.gmcoeff = 50      
+        self.gmslp = 100       
+        self.dlcoeff = 0.8
+        self.dlslp = 6
         
         # Open state transitions
-        self.OpOnCoeff = 0.75   
-        self.OpOffCoeff = 0.005 
-        self.ConHiCoeff = 0.75   
-        self.CoffHiCoeff = 0.005
-        self.OpOnSlp = 1e8      
-        self.OpOffSlp = 1e8  
+        self.OpOnCoeff = 4       # O_on (open state)
+        self.OpOffCoeff = 0.008  # O_off (open state)
+        self.ConHiCoeff = 4      # Same as OpOnCoeff (O_on)
+        self.CoffHiCoeff = 0.008 # Same as OpOffCoeff (O_off)
+        self.OpOnSlp = 1e8       # Large value = voltage-independent
+        self.OpOffSlp = 1e8      # Large value = voltage-independent
         
         # Initialize derived parameters
         self.konlo = self.kofflo = self.konhi = self.koffhi = 0
@@ -118,15 +113,14 @@ class MarkovModel:
         
         # Other model parameters
         self.numchan = 1
-        self.cm = 30
-        self.F = 96480
+        self.F = 96485
         self.Rgc = 8314
-        self.Tkel = 298
-        self.Nao, self.Nai = 155, 15
+        self.Tkel = 295
+        self.Nao, self.Nai = 150, 15
         self.ClipRate = 6000
         
         # Current scaling factor to match HH model
-        self.current_scaling = 0.0117
+        self.current_scaling = 0.0125
 
         # Initialize membrane voltage
         self.vm = -80  # Default holding potential
@@ -227,8 +221,6 @@ class MarkovModel:
         bmt = self.btcoeff * np.exp(-vt / self.btslp)
         gmt = self.gmcoeff * np.exp(vt / self.gmslp)
         dmt = self.dlcoeff * np.exp(-vt / self.dlslp)
-        emt = self.epcoeff * np.exp(vt / self.epslp)
-        zmt = self.ztcoeff * np.exp(-vt / self.ztslp)
         
         # Vectorized inactivation rates
         konlo = self.ConCoeff * np.exp(vt / self.ConSlp)
@@ -279,7 +271,7 @@ class MarkovModel:
         
         # Backward transitions in inactivated states
         self.k1110dis_vec = np.minimum(4 * bmt * (1/self.btfac), self.ClipRate)
-        self.k109dis_vec = np.minimum(3 * bmt * (1/self.btfac), self.ClipRate)
+        self.k109dis_vec = np.minimum(3 * bmt * (1/self.btfac), self.ClipRate)  
         self.k98dis_vec = np.minimum(2 * bmt * (1/self.btfac), self.ClipRate)
         self.k87dis_vec = np.minimum(bmt * (1/self.btfac), self.ClipRate)
         
@@ -349,9 +341,6 @@ class MarkovModel:
         the channel being in the open state (state 6, index 5).
         Handles potential division by zero if vm is exactly 0 mV.
         """
-
-        # Set temperature in Kelvin to fixed reference value (22°C)
-        self.Tkel = 273.15 + 22.0
         
         # No temperature scaling for permeability
         scaled_PNasc = self.PNasc
@@ -1172,7 +1161,7 @@ class MarkovModel:
         setattr(self, f"SwpSeq{self.BsNm}", self.SwpSeq.copy())
         self.CurrVolt()
         
-class AnticonvulsantMarkovModel:
+class AnticonvulsantMarkovModel(MarkovModel):
     """
     24-state Markov model for voltage-gated sodium channels with anticonvulsant drug binding.
     
@@ -1200,7 +1189,7 @@ class AnticonvulsantMarkovModel:
         SimDrugBound (numpy.ndarray): Drug-bound fraction over time
     """
     
-    def __init__(self, drug_concentration=0.0, drug_type='mixed'):
+    def __init__(self, drug_concentration=0.0, drug_type='DPH'):
         """
         Initialize the anticonvulsant Markov model.
         
@@ -1276,66 +1265,61 @@ class AnticonvulsantMarkovModel:
         - recovery_tau: Time constant for recovery from drug block (ms)
         - k_off: Drug unbinding rate (1/ms)
         - k_on: Concentration-dependent binding rates (1/ms/μM)
+        - k_off_scaling: Calibrated scaling factor to match experimental shifts
         
         Notes:
             Resting state affinity (KR) is set to 100x weaker than inactivated
             state affinity based on Kuo 1998 findings.
         """
-        # Original Kuo-Bean parameters (unchanged)
-        self.alcoeff = 150      
-        self.alslp = 20           
-        self.btcoeff = 3      
-        self.btslp = 20       
+        # Original Kuo-Bean parameters
+        self.alcoeff = 20     
+        self.alslp = 40           
+        self.btcoeff = 0.3    
+        self.btslp = 18.5      
+
+        # Inactivation parameters 
+        self.ConCoeff = 0.004    # C_off (completely deactivated state)
+        self.CoffCoeff = 4.5     # C_on (completely deactivated state)
+        self.ConSlp = 1e8        # Large value = voltage-independent
+        self.CoffSlp = 1e8       # Large value = voltage-independent
         
-        # Inactivation parameters (unchanged)
-        self.ConCoeff = 0.005
-        self.CoffCoeff = 0.5
-        self.ConSlp = 1e8       
-        self.CoffSlp = 1e8      
+        # Transition rates between states
+        self.gmcoeff = 50      
+        self.gmslp = 100       
+        self.dlcoeff = 0.8
+        self.dlslp = 6
         
-        # Transition rates between states (unchanged)
-        self.gmcoeff = 150      
-        self.gmslp = 1e12       
-        self.dlcoeff = 40       
-        self.dlslp = 1e12       
-        self.epcoeff = 1.75   
-        self.epslp = 1e12       
-        self.ztcoeff = 0.03    
-        self.ztslp = 25       
-        
-        # Open state transitions (unchanged)
-        self.OpOnCoeff = 0.75   
-        self.OpOffCoeff = 0.005 
-        self.ConHiCoeff = 0.75   
-        self.CoffHiCoeff = 0.005
-        self.OpOnSlp = 1e8      
-        self.OpOffSlp = 1e8  
+        # Open state transitions
+        self.OpOnCoeff = 4       # O_on (open state)
+        self.OpOffCoeff = 0.008  # O_off (open state)
+        self.ConHiCoeff = 4      # Same as OpOnCoeff (O_on)
+        self.CoffHiCoeff = 0.008 # Same as OpOffCoeff (O_off)
+        self.OpOnSlp = 1e8       # Large value = voltage-independent
+        self.OpOffSlp = 1e8      # Large value = voltage-independent
         
         # Calculate alfac and btfac (unchanged)
         self.alfac = np.sqrt(np.sqrt(self.ConHiCoeff / self.ConCoeff))
         self.btfac = np.sqrt(np.sqrt(self.CoffCoeff / self.CoffHiCoeff))
         
-        # Drug-specific binding affinities from Kuo 1998
+        # Drug-specific binding affinities from Kuo 1998 with calibrated scaling
         self.drug_params = {
             'CBZ': {
-                'KI_inactivated': 25.0,  # μM - from Kuo 1998
-                'recovery_tau': 189.0,   # ms - average of 180-197 ms
-                'k_off': 1.0 / 189.0     # /ms
+                'KI_inactivated': 25.0,  # μM - Kuo 1998 paper analysis (p.714)
+                'recovery_tau': 189.0,   # ms - Consistent with Kuo 1998 Fig 5A (180-197ms)
+                'k_off_base': 1.0 / 189.0,     # /ms - base k_off from recovery time
+                'k_off_scaling': 0.55    # Calibrated to match experimental shifts
             },
             'LTG': {
-                'KI_inactivated': 9.0,   # μM - from Kuo 1998  
-                'recovery_tau': 321.0,   # ms - average of 317-325 ms
-                'k_off': 1.0 / 321.0     # /ms
+                'KI_inactivated': 9.0,   # μM - Kuo 1998 paper analysis (p.714)
+                'recovery_tau': 321.0,   # ms - Consistent with Kuo 1998 Fig 5C (317-325ms)
+                'k_off_base': 1.0 / 321.0,     # /ms - base k_off from recovery time
+                'k_off_scaling': 0.42    # Calibrated to match experimental shifts
             },
             'DPH': {
-                'KI_inactivated': 9.0,   # μM - from Kuo 1998
-                'recovery_tau': 189.0,   # ms - similar to CBZ based on Kuo 1998
-                'k_off': 1.0 / 189.0     # /ms
-            },
-            'MIXED': {
-                'KI_inactivated': 15.0,  # μM - average of the three drugs
-                'recovery_tau': 233.0,   # ms - average recovery time
-                'k_off': 1.0 / 233.0     # /ms
+                'KI_inactivated': 9.0,   # μM - Kuo 1998 paper analysis (p.714)
+                'recovery_tau': 600.0,   # ms - Placeholder reflecting slower kinetics than LTG
+                'k_off_base': 1.0 / 600.0,     # /ms - base k_off from recovery time
+                'k_off_scaling': 0.50    # Calibrated to match experimental shifts
             }
         }
         
@@ -1343,30 +1327,32 @@ class AnticonvulsantMarkovModel:
         if self.drug_type in self.drug_params:
             params = self.drug_params[self.drug_type]
         else:
-            print(f"Warning: Unknown drug type '{self.drug_type}', using mixed parameters")
-            params = self.drug_params['MIXED']
+            print(f"Warning: Unknown drug type '{self.drug_type}' (or default 'DPH'), using DPH parameters as fallback.")
+            params = self.drug_params['DPH']
         
-        # Set drug-specific parameters
+        # Set drug-specific parameters with calibrated scaling
         self.KI_inactivated = params['KI_inactivated']
         self.recovery_tau = params['recovery_tau']
-        self.k_off = params['k_off']
+        
+        # Apply calibrated scaling to k_off to match experimental shifts
+        self.k_off = params['k_off_base'] * params.get('k_off_scaling', 1.0)
         
         # Resting state affinity - 100x weaker than inactivated (Kuo 1998: "mM range")
         self.KR_resting = self.KI_inactivated * 100.0
         
         # Calculate binding rates: Kd = k_off / k_on, so k_on = k_off / Kd
+        # Note: k_on uses the scaled k_off, so effective KI will match experiments
         self.k_on_inactivated_base = self.k_off / self.KI_inactivated
         self.k_on_resting_base = self.k_off / self.KR_resting
         
         # Other model parameters (unchanged)
         self.numchan = 1
-        self.cm = 30
-        self.F = 96480
+        self.F = 96485
         self.Rgc = 8314
         self.Tkel = 298
-        self.Nao, self.Nai = 155, 15
+        self.Nao, self.Nai = 150, 15
         self.ClipRate = 6000
-        self.current_scaling = 0.0117
+        self.current_scaling = 0.0125
         self.PNasc = 1e-5 
         
         # Pre-allocate for 24 states
@@ -1390,11 +1376,11 @@ class AnticonvulsantMarkovModel:
             k_off_inactivated: Unbinding rate from inactivated states (1/ms)
         """
         # Calculate concentration-dependent binding rates
-        self.k_on_resting = self.k_on_resting_base * self.drug_concentration
+        self.k_on_resting = 0
         self.k_on_inactivated = self.k_on_inactivated_base * self.drug_concentration
         
         # k_off is the same for both states (drug-specific)
-        self.k_off_resting = self.k_off
+        self.k_off_resting = 0
         self.k_off_inactivated = self.k_off
     
     def init_waves(self):
@@ -1479,8 +1465,6 @@ class AnticonvulsantMarkovModel:
         bmt = self.btcoeff * np.exp(-vt / self.btslp)
         gmt = self.gmcoeff * np.exp(vt / self.gmslp)
         dmt = self.dlcoeff * np.exp(-vt / self.dlslp)
-        emt = self.epcoeff * np.exp(vt / self.epslp)
-        zmt = self.ztcoeff * np.exp(-vt / self.ztslp)
         
         konlo = self.ConCoeff * np.exp(vt / self.ConSlp)
         kofflo = self.CoffCoeff * np.exp(-vt / self.CoffSlp)
@@ -1584,7 +1568,6 @@ class AnticonvulsantMarkovModel:
             Special handling is included for voltages near 0 mV to avoid
             numerical issues with the GHK equation.
         """
-        self.Tkel = 273.15 + 22.0
         scaled_PNasc = self.PNasc
         
         v_volts = self.vt * 1e-3
@@ -1661,7 +1644,7 @@ class AnticonvulsantMarkovModel:
         
         # Drug binding equilibrium factors
         # These represent the equilibrium constants for drug binding
-        drug_factor_closed = self.k_on_resting / self.k_off_resting
+        drug_factor_closed = 0
         drug_factor_inactivated = self.k_on_inactivated / self.k_off_inactivated
         
         # Calculate unnormalized probabilities
@@ -2016,7 +1999,7 @@ class AnticonvulsantMarkovModel:
         self.SimSwp[idx] = current
         self.SimOp[idx] = open_prob_free + open_prob_drug  # Total open probability
         self.SimIn[idx] = np.sum(self.pop[6:12]) + np.sum(self.pop[18:24])  # All inactivated
-        self.SimAv[idx] = np.sum(self.pop[:6]) + np.sum(self.pop[12:18])    # All available
+        self.SimAv[idx] = np.sum(self.pop[:6])    # All available
         self.SimCom[idx] = self.vm
         self.SimDrugBound[idx] = np.sum(self.pop[12:24])  # All drug-bound states
     
@@ -2048,7 +2031,7 @@ class AnticonvulsantMarkovModel:
         
         # Aggregate probabilities
         inactivated = np.sum(batch_states[:, 6:12], axis=1) + np.sum(batch_states[:, 18:24], axis=1)
-        available = np.sum(batch_states[:, :6], axis=1) + np.sum(batch_states[:, 12:18], axis=1)
+        available = np.sum(batch_states[:, :6], axis=1)
         drug_bound = np.sum(batch_states[:, 12:24], axis=1)
         
         self.SimSwp[indices] = currents

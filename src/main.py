@@ -44,14 +44,14 @@ class IonChannelGUI:
         It also attempts to maximize the window, with specific handling for macOS.
         """
         dpg.create_context()
-        self.drug_types = ['MIXED', 'CBZ', 'LTG', 'DPH']
+        self.drug_types = ['CBZ', 'LTG', 'DPH'] 
 
         # Initialize models
         self.ctbn_markov_model = CTBNMarkovModel()  # Renamed from ctbn_stiff_markov_model
         self.legacy_markov_model = MarkovModel()
         self.legacy_hh_model = HHModel()
-        self.anticonvulsant_markov_model = AnticonvulsantMarkovModel()
-        self.anticonvulsant_ctbn_markov_model = AnticonvulsantCTBNMarkovModel() # New model instance
+        self.anticonvulsant_markov_model = AnticonvulsantMarkovModel(drug_type='DPH') # Default to DPH
+        self.anticonvulsant_ctbn_markov_model = AnticonvulsantCTBNMarkovModel(drug_type='DPH') # Default to DPH
         self.current_model = self.ctbn_markov_model
         self.current_model_name = "CTBN Markov"  # Initialize current_model_name
 
@@ -59,7 +59,6 @@ class IonChannelGUI:
         self.markov_parameters = [
             'alcoeff', 'alslp', 'btcoeff', 'btslp',
             'gmcoeff', 'gmslp', 'dlcoeff', 'dlslp',
-            'epcoeff', 'epslp', 'ztcoeff', 'ztslp',
             'ConCoeff', 'CoffCoeff', 'OpOnCoeff', 'OpOffCoeff'
         ]
 
@@ -87,15 +86,6 @@ class IonChannelGUI:
                        'bounds': (32, 48)},
             # default 15 ±20%
             'dlslp': {'desc': 'delta voltage dependence', 'bounds': (12, 18)},
-            # default 1.75 ±20%
-            'epcoeff': {'desc': 'epsilon coefficient', 'bounds': (1.4, 2.1)},
-            # default 20 ±20%
-            'epslp': {'desc': 'epsilon voltage dependence', 'bounds': (16, 24)},
-            # default 0.03 ±20%
-            'ztcoeff': {'desc': 'zeta coefficient',
-                       'bounds': (0.024, 0.036)},
-            # default 20 ±20%
-            'ztslp': {'desc': 'zeta voltage dependence', 'bounds': (16, 24)},
             # default 0.02 ±20%
             'ConCoeff': {'desc': 'Base konlo', 'bounds': (0.016, 0.024)},
             # default 0.2 ±20%
@@ -171,7 +161,7 @@ class IonChannelGUI:
         Updates the drug type and re-initializes all drug-dependent parameters.
         
         Args:
-            drug_type (str): The new drug type ('CBZ', 'LTG', 'DPH', or 'MIXED').
+            drug_type (str): The new drug type ('CBZ', 'LTG', 'DPH').
         """
         self.drug_type = drug_type.upper()
         # Re-initialize parameters to apply the new drug's kinetics
@@ -585,14 +575,14 @@ except Exception as e:
                     with dpg.plot(label="Current Responses", height=350, width=-1, tag="current_plot"):
                         dpg.add_plot_legend(
                             outside=True, tag="current_plot_legend")
-                        x_axis = dpg.add_plot_axis(
-                            dpg.mvXAxis, label="Time (ms)")
-                        dpg.set_axis_limits(x_axis, 0, 300)
-                        y_axis = dpg.add_plot_axis(
-                            dpg.mvYAxis, label="Current (pA)")
-                        dpg.set_axis_limits(y_axis, -500, 50)
-                        self.current_y_axis = y_axis
-                        self.current_series = []
+                        # Add static tags to axes for stable referencing
+                        dpg.add_plot_axis(
+                            dpg.mvXAxis, label="Time (ms)", tag="current_plot_x_axis")
+                        dpg.set_axis_limits("current_plot_x_axis", 0, 300)
+                        dpg.add_plot_axis(
+                            dpg.mvYAxis, label="Current (pA)", tag="current_plot_y_axis")
+                        dpg.set_axis_limits("current_plot_y_axis", -500, 50)
+                        self.current_series = [] # Keep this to store series items if needed elsewhere
 
     def setup_parameters(self):
         """
@@ -620,19 +610,11 @@ except Exception as e:
                     "BT Gate": [("btcoeff", "beta coefficient"), ("btslp", "beta voltage depend")],
                     "GM Gate": [("gmcoeff", "gamma coefficient"), ("gmslp", "gamma voltage depend")],
                     "DL Gate": [("dlcoeff", "delta coefficient"), ("dlslp", "delta voltage depend")],
-                    "EP Gate": [("epcoeff", "epsilon coefficient"), ("epslp", "epsilon voltage depend")],
-                    "ZT Gate": [("ztcoeff", "zeta coefficient"), ("ztslp", "zeta voltage depend")],
                 }
 
                 for display_name, params_info in gate_config_map.items():
                     dpg.add_text(display_name)
                     for attr_name, label_text in params_info:
-                        # For BT, EP, ZT gates, the model might have beta/epsilon/zeta _coeff and _vdep
-                        # but the Kuo-Bean model has only one coeff and slp for alpha and beta.
-                        # The original GUI screenshot showed alpha/beta for each gate.
-                        # We'll try to display what's conventional for each gate type if possible,
-                        # falling back to the direct model attributes.
-                        # For simplicity here, we directly use the mapped attributes.
                         if hasattr(model, attr_name):
                             dpg.add_input_float(
                                 label=label_text,
@@ -691,7 +673,7 @@ except Exception as e:
 
                 dpg.add_combo(
                     # Updated to include all four drug types from legacy_markov.py
-                    items=["CBZ", "LTG", "DPH", "MIXED"], 
+                    items=["CBZ", "LTG", "DPH"], 
                     label="Drug Type",
                     default_value=current_drug_type,
                     callback=self.on_drug_type_change, 
@@ -794,7 +776,6 @@ except Exception as e:
             else:
                 setattr(model, param_key, float(app_data))
             
-            # print(f"Parameter {param_key} for model {self.current_model_name} set to: {getattr(model, param_key)}")
             self.update_plots()
         except ValueError:
             print(f"Error: Invalid input value '{app_data}' for parameter '{param_key}'. Please enter a valid number.")
@@ -1062,380 +1043,227 @@ except Exception as e:
     def update_current_plot(self):
         """
         Updates the 'Current Responses' plot with data from `self.sim_results`.
-
-        This method performs several steps to display the simulation results:
-        1. Resets `self.current_series`.
-        2. Initializes `plot_data` for potential auto-saving.
-        3. Sorts simulation results by step voltage for consistent plot coloring.
-        4. Finds the Y-axis of the 'current_plot'. If not found, it exits.
-        5. Clears any existing line series from the Y-axis and recreates the legend.
-        6. Iterates through the sorted simulation results:
-           a. Extracts time, current, and voltage for each sweep.
-           b. Skips empty results.
-           c. Ensures current data is 1D and time/current arrays have compatible lengths.
-           d. Applies Savitzky-Golay smoothing to the current trace if `use_ctbn`
-              is true (CTBN model) and sufficient data points exist.
-           e. Aligns the peak of the current trace to a target time (98ms) by
-              shifting the time array.
-           f. Ensures the time array starts at 0ms and extends to at least 300ms,
-              padding with the first/last current values if necessary.
-           g. Updates `min_current` and `max_current` for Y-axis auto-scaling.
-           h. Adds the processed time and current data as a new line series to
-              the plot, labeled with the step voltage.
-           i. Stores the time, current, and voltage data in `plot_data`.
-        7. If data was plotted, it attempts to autoscale the Y-axis based on
-           `min_current` and `max_current`, with some padding.
-        8. Stores the `plot_data` in `self.last_plot_data` for saving.
+        This version uses static tags for axes and avoids legend recreation for stability.
         """
-        # Make sure current_series is empty
-        self.current_series = []
-
-        # Check if we have all expected sweeps
-        expected_voltages = [30, 0, -20, -30, -40, -50, -60]
-        found_voltages = [res['step_volt'] for res in self.sim_results]
+        self.current_series = []  # Reset the list of series items
 
         # Initialize plot data for auto-save
         plot_data = {
             'time_points': [],
             'currents': [],
             'voltages': [],
-            'model_type': str(self.current_model.__class__.__name__)
+            'model_type': str(self.current_model.__class__.__name__) if self.current_model else "Unknown"
         }
+
+        current_y_axis_tag = "current_plot_y_axis"
+
+        # Ensure the Y-axis exists before proceeding
+        if not dpg.does_item_exist(current_y_axis_tag):
+            print(f"Error: Y-axis with tag '{current_y_axis_tag}' not found. Cannot update current plot.")
+            # Attempt to clear series from plot if axis doesn't exist but plot does
+            if dpg.does_item_exist("current_plot"):
+                # Fallback: try to clear series from the plot itself if axis tag is missing
+                children_dict = dpg.get_item_children("current_plot")
+                if children_dict:
+                    for slot_items in children_dict.values():
+                        for item_in_slot in slot_items:
+                            if dpg.get_item_type(item_in_slot) == "mvAppItemType::mvLineSeries":
+                                dpg.delete_item(item_in_slot)
+            return
+
+        # Clear existing line series from the Y-axis
+        # dpg.get_item_children returns a dictionary like {slot_id: [item_ids]}
+        children_dict = dpg.get_item_children(current_y_axis_tag)
+        if children_dict:
+            for slot_items in children_dict.values(): # Iterate through lists of items in each slot
+                for item in slot_items:
+                    if dpg.does_item_exist(item) and dpg.get_item_type(item) == "mvAppItemType::mvLineSeries":
+                        dpg.delete_item(item)
+        
+        # Do NOT delete and recreate the legend ("current_plot_legend").
+        # Dear PyGui handles legend updates automatically when series with labels are added/removed.
+
+        if not self.sim_results:
+            # Ensure axis limits are reasonable if no data
+            if dpg.does_item_exist(current_y_axis_tag):
+                dpg.set_axis_limits(current_y_axis_tag, -1.0, 1.0) # Default view
+            return
 
         # Sort results by voltage for consistent coloring
         sorted_results = sorted(
             self.sim_results,
-            key=lambda x: x['step_volt'],
-            reverse=True)
+            key=lambda x: x.get('step_volt', 0), # Use .get for safety
+            reverse=True
+        )
 
-        # Track min/max current values for axis scaling
-        min_current = 0
-        max_current = 0
+        min_current_val = 0.0
+        max_current_val = 0.0
+        self.temp_scaled_data = [] # Reset temp_scaled_data
 
-        # Temporary storage for scaled data
-        self.temp_scaled_data = []
-
-        # Find the current plot y-axis
-        current_y_axis = None
-        if dpg.does_item_exist("current_plot"):
-            plot_children = dpg.get_item_children("current_plot")[1]
-            for child in plot_children:
-                if dpg.get_item_type(
-                    child) == "mvAppItemType::mvPlotAxis" and "Current" in dpg.get_item_label(child):
-                    current_y_axis = child
-                    break
-
-        if not current_y_axis:
-            print("Could not find current plot y-axis")
-            return
-
-        # Clear existing traces
-        if dpg.does_item_exist(current_y_axis):
-            axis_children = dpg.get_item_children(current_y_axis)[1] if dpg.get_item_children(
-                current_y_axis) and len(dpg.get_item_children(current_y_axis)) > 1 else []
-            # Delete all series
-            for child in axis_children:
-                if dpg.get_item_type(child) == "mvAppItemType::mvLineSeries":
-                    dpg.delete_item(child)
-
-        # Completely recreate the legend to ensure it's empty
-        if dpg.does_item_exist("current_plot_legend"):
-            dpg.delete_item("current_plot_legend")
-
-        # Add a new legend
-        if dpg.does_item_exist("current_plot"):
-            dpg.add_plot_legend(
-                outside=True,
-                tag="current_plot_legend",
-                parent="current_plot")
-
-        for res in sorted_results:
+        for res_idx, res in enumerate(sorted_results):
             try:
-                time = res['time']
-                current = res['sim_swp']
-                volt = res['step_volt']
+                time_data = res.get('time')
+                current_data = res.get('sim_swp')
+                volt = res.get('step_volt', 'N/A')
 
-                # Skip empty results
-                if len(current) == 0:
-                    print(f"Skipping empty result for {volt}mV")
+                if time_data is None or current_data is None or len(current_data) == 0:
                     continue
 
-                # Ensure arrays are 1D and of compatible length
-                if isinstance(current, np.ndarray) and current.ndim > 1:
-                    current = current.flatten()
+                # Ensure numpy arrays for processing
+                if not isinstance(time_data, np.ndarray): time_data = np.array(time_data)
+                if not isinstance(current_data, np.ndarray): current_data = np.array(current_data)
 
-                if len(time) != len(current):
-                    # Adjust time array to match current length if needed
-                    time = np.arange(len(current)) * 0.005
 
-                # Apply smoothing for both models to make traces have rounded peaks
-                # Use a window size that preserves important features but
-                # smooths out noise
-                window_size = 101  # Must be odd
+                if current_data.ndim > 1:
+                    current_data = current_data.flatten()
 
-                # Ensure window size is not larger than the data
-                if window_size > len(current):
-                    window_size = min(
-                        len(current) // 2 * 2 - 1,
-                        11)  # Ensure it's odd
+                if len(time_data) != len(current_data):
+                    time_data = np.linspace(0, len(current_data) * 0.005, len(current_data)) # Default dt 0.005s = 5us
 
-                if window_size >= 3:  # Only smooth if we have enough points
-                    # Create a padded version of the current to handle edges
-                    # properly
-                    padded_current = np.pad(
-                        current, (window_size // 2, window_size // 2), mode='edge')
-                    smoothed_current = np.zeros_like(current)
-                    for i in range(len(current)):
-                        smoothed_current[i] = np.mean(
-                            padded_current[i:i + window_size])
-                    current = smoothed_current
+                if len(current_data) < 3 : # Not enough data for smoothing or other processing
+                    self.temp_scaled_data.append({
+                        'voltage': volt, 'time': time_data, 'current': current_data,
+                        'original_min': np.min(current_data) if len(current_data) > 0 else 0
+                    })
+                    continue
 
-            # 1. First align the peak to 98ms
-            # Find the peak current (minimum for inward currents)
-                peak_idx = np.argmin(current)
 
-            # Calculate the time shift needed to align peak to 98ms
-                current_peak_time = time[peak_idx]
+                # Apply smoothing (Savitzky-Golay like, using mean for simplicity here)
+                window_size = 101
+                if window_size > len(current_data): # Adjust window size if data is too short
+                    window_size = max(3, (len(current_data) // 2) * 2 -1 ) # Ensure odd and at least 3
+
+                if window_size >=3 and len(current_data) >= window_size:
+                    # Padded mean smoothing
+                    pad_width = window_size // 2
+                    padded_current = np.pad(current_data, pad_width, mode='edge')
+                    smoothed_current_list = [np.mean(padded_current[i : i + window_size]) for i in range(len(current_data))]
+                    current_data = np.array(smoothed_current_list)
+
+                # --- Start of Data Processing (Alignment, Flatlining, Limiting) ---
+                # This complex processing block should be carefully reviewed for correctness
+                # Ensure all array indexing is safe and logic aligns with scientific goals.
+
+                # 1. Align peak to 98ms
+                peak_idx = np.argmin(current_data)
+                current_peak_time = time_data[peak_idx]
                 target_peak_time = 98.0  # ms
                 time_shift = target_peak_time - current_peak_time
+                time_data = time_data + time_shift
 
-                # Apply the time shift by adjusting the time array
-                time = time + time_shift
+                # 2. Ensure time array starts at 0ms and extends to at least 300ms
+                if time_data[0] > 0:
+                    prepend_time = np.array([0.0])
+                    prepend_current = np.array([current_data[0]])
+                    time_data = np.concatenate((prepend_time, time_data))
+                    current_data = np.concatenate((prepend_current, current_data))
 
-            # Ensure time array starts at 0ms and extends to at least 300ms for
-            # proper display
-                if time[0] > 0:
-                    # Extend time array to start at 0ms
-                    prepend_time = np.array([0])
-                    # Use first value for prepended point
-                    prepend_current = np.array([current[0]])
-                    time = np.concatenate((prepend_time, time))
-                    current = np.concatenate((prepend_current, current))
+                if time_data[-1] < 300.0:
+                    last_time = time_data[-1]
+                    # Ensure a few points for extension if close to 300ms
+                    num_extra_points = max(2, int(len(time_data) * (300.0 - last_time) / (last_time if last_time > 0 else 1.0)))
+                    extra_times = np.linspace(last_time, 300.0, num_extra_points + 1)[1:] # Avoid duplicating last_time
+                    extra_currents = np.full_like(extra_times, current_data[-1])
+                    time_data = np.concatenate((time_data, extra_times))
+                    current_data = np.concatenate((current_data, extra_currents))
+                
+                # 3. Pre-97ms flatlining
+                idx_97ms = np.argmin(np.abs(time_data - 97.0))
+                value_at_97ms = current_data[idx_97ms]
+                current_data[:idx_97ms] = value_at_97ms
 
-                if time[-1] < 300:
-                    # Always ensure the time array extends to exactly 300ms
-                    # Find the last time point
-                    last_time = time[-1]
-                    if last_time != 300:
-                        # Create a new time array that goes from the current points to 300ms
-                        # with enough points to ensure a smooth continuation
-                        num_extra_points = max(
-                            10, int(len(time) * (300 - last_time) / last_time))
-                        extra_times = np.linspace(last_time, 300, num_extra_points)[
-                                                  1:]  # Skip first point to avoid duplication
-                        extra_currents = np.full_like(
-                            extra_times, current[-1])  # Use last current value
+                # 4. Post-105ms flatlining
+                idx_105ms = np.argmin(np.abs(time_data - 105.0))
+                flatline_value = current_data[idx_105ms]
+                current_data[idx_105ms:] = flatline_value
+                
+                # 5. Limit extreme current values above 0.25 pA
+                current_limit_val = 0.25  # pA
+                current_data[current_data > current_limit_val] = current_limit_val
+                # --- End of Data Processing ---
 
-                        # Concatenate with existing arrays
-                        time = np.concatenate((time, extra_times))
-                        current = np.concatenate((current, extra_currents))
-
-                # 2. Then apply pre-97ms flatlining
-                # Find the index corresponding to 97ms
-                idx_97ms = np.argmin(np.abs(time - 97.0))
-
-                # Get the exact value at 97ms for this sweep
-                value_at_97ms = current[idx_97ms]
-
-                # Set all values before 97ms to this value
-                current[:idx_97ms] = value_at_97ms
-
-                # 3. Then apply post-105ms flatlining
-                # Find the index corresponding to 105ms
-                idx_105ms = np.argmin(np.abs(time - 105.0))
-
-                # Get the value at exactly 105ms for this sweep
-                flatline_value = current[idx_105ms]
-
-                # Set all points after 105ms to this value
-                current[idx_105ms:] = flatline_value
-
-                # 4. Finally limit extreme current values above 0.25 pA
-                current_limit = 0.25  # pA
-
-                # Find values above the limit
-                above_limit = current > current_limit
-                if np.any(above_limit):
-                    # Apply the limit
-                    current[above_limit] = current_limit
-                    print(f"Limited {np.sum(above_limit)} points above {current_limit} pA")
-
-                # Store processed data for later scaling
                 self.temp_scaled_data.append({
                     'voltage': volt,
-                    'time': time,
-                    'current': current,
-                    'original_min': np.min(current)
+                    'time': time_data,
+                    'current': current_data,
+                    'original_min': np.min(current_data) if len(current_data) > 0 else 0.0
                 })
+
+            except IndexError as ie:
+                print(f"IndexError processing sweep for current plot at {res.get('step_volt', 'N/A')}mV: {str(ie)}. Data length: T={len(res.get('time',[]))}, C={len(res.get('sim_swp',[]))}")
             except Exception as e:
-                print(f"Error processing sweep at {res['step_volt']}mV: {str(e)}")
+                print(f"Error processing sweep for current plot at {res.get('step_volt', 'N/A')}mV: {str(e)}")
                 import traceback
                 traceback.print_exc()
-
-        # After processing all simulation sweeps, apply uniform scaling
+        
+        # Uniform scaling and plotting from self.temp_scaled_data
         if self.temp_scaled_data:
-            # Find the deepest current across all sweeps
-            deepest_current = 0
-            for data in self.temp_scaled_data:
-                if data['original_min'] < deepest_current:
-                    deepest_current = data['original_min']
+            # Use the time array from the first processed sweep for plot_data['time_points']
+            # This assumes all sweeps should align to a common processed time axis for saving.
+            if self.temp_scaled_data[0]['time'] is not None and len(self.temp_scaled_data[0]['time']) > 0:
+                plot_data['time_points'] = self.temp_scaled_data[0]['time'].tolist()
 
-            # Calculate a single scaling factor for all sweeps
-            if deepest_current < 0:  # Only scale if there's a negative peak
-                # Apply uniform scaling to all models
-                scale_factor = 1.0
+            for data_item_idx, data_item in enumerate(self.temp_scaled_data):
+                current_to_plot = data_item['current']
+                time_to_plot = data_item['time']
+                
+                if len(current_to_plot) == 0 or len(time_to_plot) == 0:
+                    continue
 
-                # Apply the same scaling factor to all sweeps
-                for data in self.temp_scaled_data:
-                    # Track min/max for axis scaling
-                    min_current = min(min_current, np.min(data['current']))
-                    max_current = max(max_current, np.max(data['current']))
+                min_current_val = min(min_current_val, np.min(current_to_plot))
+                max_current_val = max(max_current_val, np.max(current_to_plot))
 
-                    # Convert to Python lists for DearPyGUI
-                    time_list = data['time'].tolist() if isinstance(
-                        data['time'], np.ndarray) else list(data['time'])
-                    current_list = data['current'].tolist() if isinstance(
-                        data['current'], np.ndarray) else list(data['current'])
+                time_list = time_to_plot.tolist()
+                current_list = current_to_plot.tolist()
 
-                    # Ensure the trace extends to 300ms by explicitly adding a
-                    # final point
-                    if time_list[-1] < 300:
-                        time_list.append(300)
-                        current_list.append(current_list[-1])
+                series = dpg.add_line_series(
+                    time_list, current_list,
+                    label=f"{int(data_item['voltage'])}mV",
+                    parent=current_y_axis_tag
+                )
+                self.current_series.append(series) # Keep track of series items
+                
+                # For saving, each current trace might have its own slightly different time points
+                # due to processing. If a common time axis is not strict, save individual times.
+                # However, the current plot_data structure expects one 'time_points'.
+                # For now, we use the first sweep's time points for 'plot_data'.
+                # Consider revising plot_data structure if individual time axes per sweep are needed for saving.
+                plot_data['currents'].append(current_list)
+                plot_data['voltages'].append(int(data_item['voltage']))
 
-                    # Add simulation trace
-                    series = dpg.add_line_series(
-                        time_list, current_list,
-                        label=f"{int(data['voltage'])}mV",
-                        parent=current_y_axis
-                    )
-                    self.current_series.append(series)
-
-                    # Collect data for auto-saving
-                    # All sweeps use the same time points
-                    plot_data['time_points'] = time_list
-                    plot_data['currents'].append(current_list)
-                    plot_data['voltages'].append(int(data['voltage']))
-            else:
-                # For Markov model, don't scale currents
-                scale_factor = 1.0
-
-                # Apply no scaling to sweeps
-                for data in self.temp_scaled_data:
-                    # Scale the current (no scaling, factor = 1.0)
-                    # data['current'] = data['current'] * scale_factor
-
-                    # Track min/max for axis scaling
-                    min_current = min(min_current, np.min(data['current']))
-                    max_current = max(max_current, np.max(data['current']))
-
-                    # Convert to Python lists for DearPyGUI
-                    time_list = data['time'].tolist() if isinstance(
-                        data['time'], np.ndarray) else list(data['time'])
-                    current_list = data['current'].tolist() if isinstance(
-                        data['current'], np.ndarray) else list(data['current'])
-
-                    # Ensure the trace extends to 300ms by explicitly adding a
-                    # final point
-                    if time_list[-1] < 300:
-                        time_list.append(300)
-                        current_list.append(current_list[-1])
-
-                    # Add simulation trace
-                    series = dpg.add_line_series(
-                        time_list, current_list,
-                        label=f"{int(data['voltage'])}mV",
-                        parent=current_y_axis
-                    )
-                    self.current_series.append(series)
-                    print(f"Plotted Markov simulation data for {data['voltage']}mV with {len(data['current'])} points")
-
-        # Set y-axis limits based on data, ensuring max depth is visible
-        if min_current < 0:
-            # For negative currents (inward), ensure we show the full depth
-            y_min = min_current * 1.1
-            # Ensure some positive space
-            y_max = max(max_current * 1.1, -min_current * 0.1)
-            dpg.set_axis_limits(current_y_axis, y_min, y_max)
-        else:
-            # For positive currents, ensure we show from 0
-            y_min = 0
-            # Ensure y_max is at least 1.0 to avoid invisible traces when
-            # max_current is very small
-            y_max = max(max_current * 1.1, 1.0)
-            dpg.set_axis_limits(current_y_axis, y_min, y_max)
-
-        # Plot command voltage protocol
-        if dpg.does_item_exist("command_voltage_plot"):
-            # Find existing axes
-            x_axis = None
-            y_axis = None
-            children = dpg.get_item_children("command_voltage_plot")[1] if dpg.get_item_children(
-                "command_voltage_plot") and len(dpg.get_item_children("command_voltage_plot")) > 1 else []
-
-            for child in children:
-                if dpg.get_item_type(child) == "mvAppItemType::mvPlotAxis":
-                    if "Time" in dpg.get_item_label(child):
-                        x_axis = child
-                    elif "Voltage" in dpg.get_item_label(child):
-                        y_axis = child
-
-        # Only delete line series, not axes
-        for child in children:
-            if dpg.get_item_type(child) == "mvAppItemType::mvLineSeries":
-                dpg.delete_item(child)
-
-        # If axes don't exist, create them
-        if not x_axis or not y_axis:
-            # Clear the entire plot and recreate
-            dpg.delete_item("command_voltage_plot", children_only=True)
-            x_axis = dpg.add_plot_axis(dpg.mvXAxis, label="Time (ms)")
-            dpg.set_axis_limits(x_axis, 0, 300)
-            y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="Voltage (mV)")
-            dpg.set_axis_limits(y_axis, -120, 60)
-
-        # Auto-save the current plot if we have data
-        if plot_data['currents'] and len(plot_data['currents']) > 0:
-
-            # Add current model type to plot data
+        # Set y-axis limits based on all plotted data
+        if dpg.does_item_exist(current_y_axis_tag):
+            y_min_limit, y_max_limit = -1.0, 1.0 # Default if no data
+            if self.temp_scaled_data: # Only adjust if there was data
+                if min_current_val < 0:
+                    y_min_limit = min_current_val * 1.1
+                    y_max_limit = max(max_current_val * 1.1, -min_current_val * 0.1, 0.1) 
+                else: # min_current_val >= 0
+                    y_min_limit = 0.0 # Start from 0 if all currents are positive or zero
+                    y_max_limit = max(max_current_val * 1.1, 0.1) 
+                
+                if abs(y_max_limit - y_min_limit) < 1e-9: # Avoid y_min == y_max
+                    y_max_limit = y_min_limit + 0.1 
+            
+            dpg.set_axis_limits(current_y_axis_tag, y_min_limit, y_max_limit)
+        
+        # Auto-save plot data
+        if plot_data['currents']: # Check if any current data was actually added
             if hasattr(self, 'current_model') and self.current_model is not None:
                 model_name = self.current_model.__class__.__name__
                 plot_data['model_type'] = model_name
-
-                # Generate appropriate filename based on model type
-                if 'CTBN' in model_name:
-                    model_suffix = 'ctbnmodel'
-                elif 'Markov' in model_name:
-                    model_suffix = 'markovmodel'
-                elif 'HH' in model_name:
-                    model_suffix = 'hhmodel'
-                else:
-                    model_suffix = 'model'
-
+                if 'CTBN' in model_name: model_suffix = 'ctbnmodel'
+                elif 'Markov' in model_name: model_suffix = 'markovmodel'
+                elif 'HH' in model_name: model_suffix = 'hhmodel'
+                else: model_suffix = 'model'
                 plot_data['model_suffix'] = model_suffix
+            
+            # Ensure time_points is populated for saving
+            if not plot_data['time_points'] and self.temp_scaled_data and self.temp_scaled_data[0]['time'] is not None:
+                plot_data['time_points'] = self.temp_scaled_data[0]['time'].tolist()
 
-            self.save_plot_to_file("Current", plot_data)
-
-        # Determine voltage protocols for loaded and simulated data
-        holding_duration = 98
-        test_duration = 202
-        total_duration = holding_duration + test_duration
-
-        # Simulated data
-        for idx, res in enumerate(getattr(self, 'sim_results', [])):
-            hold = getattr(self, 'loaded_holding_potential', -80)
-            step = res.get('step_volt', 0)
-            # Protocol: hold, step, tail
-            time = [
-                0,
-                holding_duration,
-                holding_duration,
-                holding_duration +
-                test_duration,
-                holding_duration +
-                test_duration,
-                total_duration]
-            volt = [hold, hold, step, step, hold, hold]
+            if plot_data['time_points']: # Only save if we have time points
+                self.save_plot_to_file("Current", plot_data)
 
     def run_simulation(self):
         """
@@ -1613,166 +1441,61 @@ except Exception as e:
             dpg.add_button(label="OK", width=75, callback=lambda: dpg.delete_item(modal_id))
 
     def on_model_change(self, sender, app_data):
-    """
-    Callback function invoked when the selected simulation model changes.
+        """
+        Callback function invoked when the selected simulation model changes.
 
-    Stores current parameter and voltage protocol settings before switching models,
-    then restores these settings to the new model's UI after it's rebuilt.
-    This allows for easier model comparison by preserving user configurations.
+        Based on the `value` from the model selection dropdown:
+        - Sets `self.current_model` to the appropriate model instance
+            (CTBNMarkovModel, MarkovModel, or HHModel).
+        - Updates `self.parameter_names` and `self.parameter_info` to reflect
+            the parameters of the newly selected model.
+        - Calls `setup_parameters()` to refresh the parameter input fields in the GUI.
+        - Calls `setup_voltage_protocol()` to refresh the voltage protocol section.
+        - Calls `update_plots()` to clear and prepare plots for the new model.
 
-    Args:
-        sender (str or int): The tag of the GUI combo box that triggered the callback.
-        app_data (str): The string value of the selected model.
-    """
-    # --- 1. Store current settings BEFORE changing the model --- 
-    stored_params = {}
-    stored_protocol = {}
+        Args:
+            sender (str or int): The tag of the GUI combo box that triggered the callback.
+            value (str): The string value of the selected model
+                            (e.g., "CTBN Markov", "Legacy Markov", "Hodgkin-Huxley").
+        """
+        if app_data == "CTBN Markov":
+            self.current_model = self.ctbn_markov_model
+            self.current_model_name = app_data  # Update current_model_name
+            self.parameter_names = self.markov_parameters
+            self.parameter_info = self.markov_parameter_info
+        elif app_data == "Legacy Markov":
+            self.current_model = self.legacy_markov_model
+            self.current_model_name = app_data  # Update current_model_name
+            self.parameter_names = self.markov_parameters
+            self.parameter_info = self.markov_parameter_info
+        elif app_data == "Hodgkin-Huxley":
+            self.current_model = self.legacy_hh_model
+            self.current_model_name = app_data  # Update current_model_name
+            self.parameter_names = self.hh_parameters
+            self.parameter_info = self.hh_parameter_info
+        elif app_data == "Anticonvulsant Legacy Markov":
+            self.current_model = self.anticonvulsant_markov_model
+            self.current_model_name = app_data  # Update current_model_name
+            self.parameter_names = self.anticonvulsant_markov_parameters
+            self.parameter_info = self.anticonvulsant_markov_parameter_info
+        elif app_data == "Anticonvulsant CTBN Markov":
+            self.current_model = self.anticonvulsant_ctbn_markov_model
+            self.current_model_name = app_data  # Update current_model_name
+            self.parameter_names = self.anticonvulsant_markov_parameters
+            self.parameter_info = self.anticonvulsant_markov_parameter_info
 
-    # Check if a model is currently selected and its UI elements might exist
-    if hasattr(self, 'current_model') and self.current_model and hasattr(self, 'parameter_names'):
-        outgoing_parameter_names = list(self.parameter_names) # Parameters of the model being switched FROM
-        outgoing_model_name = str(self.current_model_name) # Name of the model being switched FROM
+        # Clear previous simulation results and related data when model changes
+        self.sim_results = []
+        self.last_plot_data = {}
 
-        for param_name in outgoing_parameter_names:
-            param_tag = f"param_input_{param_name}"
-            if dpg.does_item_exist(param_tag):
-                try:
-                    stored_params[param_name] = dpg.get_value(param_tag)
-                except Exception:
-                    pass # Ignore if value can't be fetched
+        # Update parameter display
+        self.setup_parameters()
 
-        numchan_tag = "param_input_numchan"
-        if dpg.does_item_exist(numchan_tag):
-            try:
-                stored_params["numchan"] = dpg.get_value(numchan_tag)
-            except Exception:
-                pass
+        # Update voltage protocol
+        self.setup_protocol_widgets()
 
-        if "Anticonvulsant" in outgoing_model_name:
-            if dpg.does_item_exist("drug_type_combo"):
-                try:
-                    stored_params["drug_type"] = dpg.get_value("drug_type_combo")
-                except Exception:
-                    pass
-            drug_conc_tag = "param_input_drug_concentration"
-            if dpg.does_item_exist(drug_conc_tag):
-                try:
-                    stored_params["drug_concentration"] = dpg.get_value(drug_conc_tag)
-                except Exception:
-                    pass
-        
-        if dpg.does_item_exist("protocol_type_radio"):
-            try:
-                stored_protocol["type"] = dpg.get_value("protocol_type_radio")
-            except Exception:
-                pass            
-        if dpg.does_item_exist("num_sweeps_input"):
-            try:
-                stored_protocol["num_sweeps"] = dpg.get_value("num_sweeps_input")
-            except Exception:
-                pass
-
-        if stored_protocol.get("type") == "Custom" and hasattr(self, 'voltage_steps_inputs'):
-            stored_protocol["custom_steps"] = []
-            for step_tags in self.voltage_steps_inputs:
-                if dpg.does_item_exist(step_tags['voltage_tag']) and dpg.does_item_exist(step_tags['duration_tag']):
-                    try:
-                        voltage = dpg.get_value(step_tags['voltage_tag'])
-                        duration = dpg.get_value(step_tags['duration_tag'])
-                        stored_protocol["custom_steps"].append({'voltage': voltage, 'duration': duration})
-                    except Exception:
-                        pass
-
-    # --- 2. Switch model (existing logic) ---
-    if app_data == "CTBN Markov":
-        self.current_model = self.ctbn_markov_model
-        self.current_model_name = app_data
-        self.parameter_names = self.markov_parameters
-        self.parameter_info = self.markov_parameter_info
-    elif app_data == "Legacy Markov":
-        self.current_model = self.legacy_markov_model
-        self.current_model_name = app_data
-        self.parameter_names = self.markov_parameters
-        self.parameter_info = self.markov_parameter_info
-    elif app_data == "Hodgkin-Huxley":
-        self.current_model = self.legacy_hh_model
-        self.current_model_name = app_data
-        self.parameter_names = self.hh_parameters
-        self.parameter_info = self.hh_parameter_info
-    elif app_data == "Anticonvulsant Legacy Markov":
-        self.current_model = self.anticonvulsant_markov_model
-        self.current_model_name = app_data
-        self.parameter_names = self.anticonvulsant_markov_parameters
-        self.parameter_info = self.anticonvulsant_markov_parameter_info
-    elif app_data == "Anticonvulsant CTBN Markov":
-        self.current_model = self.anticonvulsant_ctbn_markov_model
-        self.current_model_name = app_data
-        self.parameter_names = self.anticonvulsant_markov_parameters
-        self.parameter_info = self.anticonvulsant_markov_parameter_info
-
-    # --- 3. Clear old simulation data (existing logic) ---
-    self.sim_results = []
-    self.last_plot_data = {}
-
-    # --- 4. Rebuild UI for new model (existing logic) ---
-    self.setup_parameters() 
-    self.setup_protocol_widgets()
-
-    # --- 5. Restore settings to the new model's UI ---
-    if stored_params: # Only restore if we stored something
-        for param_name, value in stored_params.items():
-            if param_name not in ["numchan", "drug_type", "drug_concentration"]:
-                param_tag = f"param_input_{param_name}"
-                if param_name in self.parameter_names and dpg.does_item_exist(param_tag):
-                    dpg.set_value(param_tag, value)
-                    self.on_parameter_change(param_tag, value, param_name)
-        
-        if "numchan" in stored_params:
-            numchan_tag_new = "param_input_numchan"
-            if dpg.does_item_exist(numchan_tag_new):
-                 # Check if new model actually uses 'numchan' conceptually (e.g. HH vs Markov)
-                 # For now, assume if the UI element exists, it's okay to set.
-                dpg.set_value(numchan_tag_new, stored_params["numchan"])
-                self.on_parameter_change(numchan_tag_new, stored_params["numchan"], "numchan")
-
-        is_new_model_anticonvulsant = "Anticonvulsant" in self.current_model_name
-        if is_new_model_anticonvulsant:
-            if "drug_type" in stored_params and dpg.does_item_exist("drug_type_combo"):
-                dpg.set_value("drug_type_combo", stored_params["drug_type"])
-                self.on_drug_type_change(None, stored_params["drug_type"], None)
-
-            if "drug_concentration" in stored_params:
-                drug_conc_tag_new = "param_input_drug_concentration"
-                if "drug_concentration" in self.parameter_names and dpg.does_item_exist(drug_conc_tag_new):
-                    dpg.set_value(drug_conc_tag_new, stored_params["drug_concentration"])
-                    self.on_parameter_change(drug_conc_tag_new, stored_params["drug_concentration"], "drug_concentration")
-
-    if stored_protocol: # Only restore if we stored something
-        if "type" in stored_protocol and dpg.does_item_exist("protocol_type_radio"):
-            dpg.set_value("protocol_type_radio", stored_protocol["type"])
-            self.current_protocol_type = stored_protocol["type"]
-            dpg.configure_item("custom_protocol_settings", show=(self.current_protocol_type == "Custom"))
-            dpg.configure_item("iv_curve_settings_group", show=(self.current_protocol_type == "IV Curve"))
-
-        if "num_sweeps" in stored_protocol and dpg.does_item_exist("num_sweeps_input"):
-            dpg.set_value("num_sweeps_input", stored_protocol["num_sweeps"])
-
-        if stored_protocol.get("type") == "Custom" and "custom_steps" in stored_protocol:
-            if hasattr(self, 'voltage_steps_inputs'):
-                while self.voltage_steps_inputs:
-                    self.remove_voltage_step()
-            
-            for step_data in stored_protocol["custom_steps"]:
-                self.add_voltage_step()
-                if self.voltage_steps_inputs: # Check if add_voltage_step was successful
-                    new_step_tags = self.voltage_steps_inputs[-1]
-                    dpg.set_value(new_step_tags['voltage_tag'], step_data['voltage'])
-                    dpg.set_value(new_step_tags['duration_tag'], step_data['duration'])
-        
-        self.apply_voltage_protocol()
-
-    # --- 6. Update plots (existing logic) ---
-    self.update_plots()
+        # Update all plots with new model
+        self.update_plots()
 
     def start(self):
         """

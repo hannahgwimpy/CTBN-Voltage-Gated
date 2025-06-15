@@ -23,8 +23,8 @@ logging.basicConfig(
 from scipy.optimize import curve_fit
 import scikit_posthocs as sp
 from pathlib import Path
-from ctbn_markov import AnticonvulsantCTBNMarkovModel
-from legacy_markov import AnticonvulsantMarkovModel
+from ctbn_markov import CTBNMarkovModel
+from legacy_markov import MarkovModel
 from legacy_hh import HHModel
 
 # Configure matplotlib for publication quality
@@ -46,8 +46,8 @@ np.random.seed(42)
 
 # Constants
 MODEL_NAMES = {
-    'ctbn_stiff': 'Anticonvulsant CTBN Markov',
-    'legacy_markov': 'Anticonvulsant Legacy Markov',
+    'ctbn_stiff': 'CTBN Markov',
+    'legacy_markov': 'Legacy Markov',
     'legacy_hh': 'Legacy HH'
 }
 
@@ -224,10 +224,10 @@ def measure_memory_and_time(func, model_for_static_analysis, *args, **kwargs):
             if model_name == "LegacyHHModel":
                 # HH model typically uses default protocol with 40,000 points
                 steps = 40000
-            elif model_name == "LegacyAnticonvulsantMarkovModel":
+            elif model_name == "LegacyMarkovModel":
                 # Legacy Markov typically uses around 8,000 steps
                 steps = 8000
-            elif model_name == "AnticonvulsantCTBNMarkovModel":
+            elif model_name == "CTBNMarkovModel":
                 # CTBN models use dynamic stepping but typical count is ~4000
                 steps = 4000
             else:
@@ -253,8 +253,8 @@ def initialize_models():
     print("Initializing models...")
     
     models = {
-        'ctbn_stiff': AnticonvulsantCTBNMarkovModel(),
-        'legacy_markov': AnticonvulsantMarkovModel(),
+        'ctbn_stiff': CTBNMarkovModel(),
+        'legacy_markov': MarkovModel(),
         'legacy_hh': HHModel()
     }
     
@@ -270,9 +270,7 @@ def initialize_models():
                 model.set_drug_type('LTG')
                 model.set_drug_concentration(25.0)  # Assuming concentration is in µM
                 # print(f"    Drug set to LTG, 25.0 µM for {model_class.__name__}") # Optional: for debugging
-            else:
-                print(f"    Warning: Could not set drug_type or drug_concentration for {model_class.__name__}. Methods not found.")
-            
+ 
     return models
 
 def benchmark_computational_efficiency(models, n_repeats=30):
@@ -367,7 +365,7 @@ def benchmark_computational_efficiency(models, n_repeats=30):
     df = pd.DataFrame(results)
     
     # Save raw data
-    df.to_csv('data/benchmark/data/anticonvulsant_computational_efficiency.csv', index=False)
+    df.to_csv('data/benchmark/data/computational_efficiency.csv', index=False)
     
     return df
 
@@ -506,7 +504,7 @@ def benchmark_parallel_scaling(models, max_processes=multiprocessing.cpu_count()
     df_results = pd.DataFrame(results)
     
     # Save raw data
-    output_path = 'data/benchmark/data/anticonvulsant_parallel_scaling_actual.csv' # New filename to avoid overwriting old results
+    output_path = 'data/benchmark/data/parallel_scaling_actual.csv' # New filename to avoid overwriting old results
     df_results.to_csv(output_path, index=False)
     print(f"Actual parallel scaling results saved to {output_path}")
     
@@ -596,7 +594,7 @@ def benchmark_weak_scaling(models, max_factor=4, n_repeats=5):
     df = pd.DataFrame(results)
     
     # Save raw data
-    df.to_csv('data/benchmark/data/anticonvulsant_weak_scaling.csv', index=False)
+    df.to_csv('data/benchmark/data/weak_scaling.csv', index=False)
     
     return df
 
@@ -2125,8 +2123,8 @@ if __name__ == "__main__":
     import sys
     import os
     from legacy_hh import HHModel
-    from legacy_markov import AnticonvulsantMarkovModel
-    from ctbn_markov import AnticonvulsantCTBNMarkovModel
+    from legacy_markov import MarkovModel
+    from ctbn_markov import CTBNMarkovModel
     
     # Create output directory
     os.makedirs('data/benchmark', exist_ok=True)
@@ -2138,8 +2136,8 @@ if __name__ == "__main__":
     print("Initializing models...")
     models = {
         'legacy_hh': HHModel(),
-        'legacy_markov': AnticonvulsantMarkovModel(),
-        'ctbn_stiff': AnticonvulsantCTBNMarkovModel()
+        'legacy_markov': MarkovModel(),
+        'ctbn_stiff': CTBNMarkovModel()
     }
     
     # Parse command-line arguments
@@ -2172,7 +2170,7 @@ if __name__ == "__main__":
                 print("Loading existing benchmark data...")
                 
                 # Computational efficiency data
-                comp_path = os.path.join(data_dir, 'anticonvulsant_computational_efficiency.csv')
+                comp_path = os.path.join(data_dir, 'computational_efficiency.csv')
                 if os.path.exists(comp_path):
                     df_comp = pd.read_csv(comp_path)
                     print(f"Loaded computational efficiency data from {comp_path}")
@@ -2185,7 +2183,7 @@ if __name__ == "__main__":
                     print(f"Warning: Could not find computational efficiency data at {comp_path}")
                 
                 # Weak scaling data
-                weak_path = os.path.join(data_dir, 'anticonvulsant_weak_scaling.csv')
+                weak_path = os.path.join(data_dir, 'weak_scaling.csv')
                 if os.path.exists(weak_path):
                     df_weak = pd.read_csv(weak_path)
                     print(f"Loaded weak scaling data from {weak_path}")

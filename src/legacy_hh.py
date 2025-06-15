@@ -311,7 +311,7 @@ class HHModel:
         
         # Current = permeability * open_probability * driving_force
         open_prob = m1 * m2 * m3 * h
-        current = open_prob * ghk_current * self.numchan * 0.021  # Scale to match
+        current = open_prob * ghk_current * self.numchan * 0.0105  # Scale to match
         
         return current
     
