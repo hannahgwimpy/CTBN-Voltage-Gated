@@ -1,25 +1,20 @@
-
 import dearpygui.dearpygui as dpg
 import numpy as np
 import sys
 import threading
 import gc
 from multiprocessing import Pool, freeze_support
-
 from worker import run_single_sweep
 from ctbn_markov import CTBNMarkovModel, AnticonvulsantCTBNMarkovModel
 from legacy_markov import MarkovModel, AnticonvulsantMarkovModel
 from legacy_hh import HHModel
-
 class IonChannelGUI:
     """
     Manages the main application GUI for simulating and comparing ion channel models.
-
     This class initializes the DearPyGui context, sets up the different simulation
     models (CTBN Markov, Legacy Markov, Hodgkin-Huxley), defines their parameters,
     and builds the user interface for model selection, parameter adjustment,
     voltage protocol definition, simulation execution, and results visualization.
-
     Attributes:
         ctbn_stiff_markov_model (CTBNMarkovModel): Instance of the CTBN Markov model.
         legacy_markov_model (MarkovModel): Instance of the Legacy Markov model.
@@ -37,7 +32,6 @@ class IonChannelGUI:
     def __init__(self):
         """
         Initializes the IonChannelGUI application.
-
         Sets up the DearPyGui context, initializes the simulation models,
         defines model parameters and their default values/bounds,
         configures the main viewport, and calls the GUI setup method.
@@ -45,86 +39,54 @@ class IonChannelGUI:
         """
         dpg.create_context()
         self.drug_types = ['CBZ', 'LTG', 'DPH'] 
-
-        # Initialize models
-        self.ctbn_markov_model = CTBNMarkovModel()  # Renamed from ctbn_stiff_markov_model
+        self.ctbn_markov_model = CTBNMarkovModel()                                        
         self.legacy_markov_model = MarkovModel()
         self.legacy_hh_model = HHModel()
-        self.anticonvulsant_markov_model = AnticonvulsantMarkovModel(drug_type='DPH') # Default to DPH
-        self.anticonvulsant_ctbn_markov_model = AnticonvulsantCTBNMarkovModel(drug_type='DPH') # Default to DPH
+        self.anticonvulsant_markov_model = AnticonvulsantMarkovModel(drug_type='DPH')                 
+        self.anticonvulsant_ctbn_markov_model = AnticonvulsantCTBNMarkovModel(drug_type='DPH')                 
         self.current_model = self.ctbn_markov_model
-        self.current_model_name = "CTBN Markov"  # Initialize current_model_name
-
-        # Model parameters
+        self.current_model_name = "CTBN Markov"                                 
         self.markov_parameters = [
             'alcoeff', 'alslp', 'btcoeff', 'btslp',
             'gmcoeff', 'gmslp', 'dlcoeff', 'dlslp',
             'ConCoeff', 'CoffCoeff', 'OpOnCoeff', 'OpOffCoeff'
         ]
-
         self.hh_parameters = ['g_Na', 'E_Na', 'C_m', 'numchan']
         self.anticonvulsant_markov_parameters = self.markov_parameters + ['drug_concentration']
-        self.parameter_names = self.markov_parameters  # Default
-
-        # Parameter descriptions and bounds
+        self.parameter_names = self.markov_parameters           
         self.markov_parameter_info = {
-            # default 80 ±20%
             'alcoeff': {'desc': 'alpha coefficient', 'bounds': (64, 96)},
-            # default 8 ±20%
             'alslp': {'desc': 'alpha voltage dependence', 'bounds': (6.4, 9.6)},
-            # default 0.8 ±20%
             'btcoeff': {'desc': 'beta coefficient',
                        'bounds': (0.64, 0.96)},
-            # default 15 ±20%
             'btslp': {'desc': 'beta voltage dependence', 'bounds': (12, 18)},
-            # default 150 ±20%
             'gmcoeff': {'desc': 'gamma coefficient', 'bounds': (120, 180)},
-            # default 8 ±20%
             'gmslp': {'desc': 'gamma voltage dependence', 'bounds': (6.4, 9.6)},
-            # default 40 ±20%
             'dlcoeff': {'desc': 'delta coefficient',
                        'bounds': (32, 48)},
-            # default 15 ±20%
             'dlslp': {'desc': 'delta voltage dependence', 'bounds': (12, 18)},
-            # default 0.02 ±20%
             'ConCoeff': {'desc': 'Base konlo', 'bounds': (0.016, 0.024)},
-            # default 0.2 ±20%
             'CoffCoeff': {'desc': 'Base kofflo', 'bounds': (0.16, 0.24)},
-            # default 0.75 ±20%
             'OpOnCoeff': {'desc': 'Base konOp', 'bounds': (0.6, 0.9)},
-            # default 0.005 ±20%
             'OpOffCoeff': {'desc': 'Base koffOp', 'bounds': (0.004, 0.006)}
         }
-
         self.hh_parameter_info = {
-            # default 0.12 mS/cm²
             'g_Na': {'desc': 'Max Na Conductance (mS/cm²)', 'bounds': (0.05, 0.25)},
-            # default 50 mV
             'E_Na': {'desc': 'Na Reversal Potential (mV)', 'bounds': (40, 60)},
-            # default 1 μF/cm²
             'C_m': {'desc': 'Membrane Capacitance (μF/cm²)', 'bounds': (0.8, 1.2)},
-            # default 1
             'numchan': {'desc': 'Number of Channels', 'bounds': (1, 1000)}
         }
-
         self.anticonvulsant_markov_parameter_info = self.markov_parameter_info.copy()
         self.anticonvulsant_markov_parameter_info.update({
             'drug_concentration': {'desc': 'Drug Concentration (μM)', 'bounds': (0, 100)}
         })
-        self.parameter_info = self.markov_parameter_info  # Default
-
+        self.parameter_info = self.markov_parameter_info           
         self.sim_results = []
         self.spont_ap_results = None
         self.evoked_ap_results = None
-
-        # Temporary storage for scaled data
         self.temp_scaled_data = []
         self.temp_sim_scaled_data = []
         self.voltage_step_tags = []
-
-        # Create themes for different data types
-
-        # Create viewport with specific settings
         dpg.create_viewport(
             title="Ion Channel Simulator",
             width=1400,
@@ -133,58 +95,40 @@ class IonChannelGUI:
             decorated=True,
             vsync=True
         )
-
         dpg.setup_dearpygui()
-
-        # Create primary window that fills viewport
         with dpg.window(label="Main Window", autosize=True, no_resize=False, no_title_bar=True, no_move=True, tag="primary_window"):
-            self.setup_gui()  # Move GUI setup inside the primary window
-
+            self.setup_gui()                                            
         dpg.show_viewport()
-
-        # Try platform-specific maximization for macOS
         if sys.platform == 'darwin':
             import objc
             import AppKit
-
-            # Get the window
             window = AppKit.NSApp().mainWindow()
             if window:
-                # Maximize the window
                 window.zoom_(None)
         else:
-            # For other platforms
             dpg.maximize_viewport()
-
     def set_drug_type(self, drug_type):
         """
         Updates the drug type and re-initializes all drug-dependent parameters.
-        
         Args:
             drug_type (str): The new drug type ('CBZ', 'LTG', 'DPH').
         """
         self.drug_type = drug_type.upper()
-        # Re-initialize parameters to apply the new drug's kinetics
         self.init_parameters()
-        # Re-calculate voltage-dependent rates with the new parameters
         self.stRatesVolt()
-
     def on_drug_type_change(self, sender, app_data, user_data):
         """Callback for the drug type combo box."""
         drug_type = app_data
         if hasattr(self.current_model, 'set_drug_params'):
             self.current_model.set_drug_params(drug_type)
-            self.setup_parameters()  # Refresh GUI to show new drug params
+            self.setup_parameters()                                       
         print(f"Drug type changed to: {drug_type}")
-
     def save_plot_to_file(self, plot_type, plot_data):
         """
         Saves the specified plot data to a PNG file in a separate process.
-
         This method is designed to auto-save "Current" or "Current Traces" plots.
         Other plot types (e.g., comparison plots) are expected to be saved
         via a different mechanism and will be skipped by this method.
-
         To avoid potential GUI backend conflicts with Matplotlib, this method
         works by:
         1. Creating a temporary directory.
@@ -208,7 +152,6 @@ class IonChannelGUI:
            directory and its contents.
         6. Stores the path of the saved file in `self.last_saved_plot` and
            displays a success or error message.
-
         Args:
             plot_type (str): The type of plot to save (e.g., "Current",
                              "Current Traces").
@@ -217,36 +160,22 @@ class IonChannelGUI:
                               includes 'time_points', 'currents', 'voltages',
                               and 'model_type'.
         """
-        # Only auto-save current plots, not comparison plots
         if plot_type != "Current" and plot_type != "Current Traces":
             print(
     f"Skipping auto-save for {plot_type} plot - should be saved via save_comparison_plots")
             return
-
-        # Create a separate process to handle the save operation to avoid GUI
-        # conflicts
         try:
-            # Import all dependencies here to avoid import errors
             import subprocess
             import tempfile
             import json
             import os
             import sys
-
-            # Create a temporary directory to store data
             temp_dir = tempfile.mkdtemp()
             data_file = os.path.join(temp_dir, "plot_data.json")
-
-            # For Current plot type, ensure we have model information
             if plot_type == "Current" and hasattr(
                 self, 'current_model') and self.current_model is not None:
-                # Add model type to plot data if not already present
                 if 'model_type' not in plot_data:
                     plot_data['model_type'] = self.current_model.__class__.__name__
-
-                # Make sure we're using the data already in plot_data rather than regenerating
-                # Only try to get data from model if we don't already have it
-                # in plot_data
                 if ('time_points' not in plot_data or 'currents' not in plot_data) and hasattr(
                     self.current_model, 'SimTime') and hasattr(self.current_model, 'SimCur'):
                     try:
@@ -256,8 +185,6 @@ class IonChannelGUI:
     self.current_model.SimCur.tolist() if hasattr(
         self.current_model.SimCur, 'tolist') else list(
             self.current_model.SimCur)]
-
-                        # Add voltage protocol if available
                         if hasattr(self.current_model, 'SimCom'):
                             plot_data['voltages'] = [
     self.current_model.SimCom.tolist() if hasattr(
@@ -268,15 +195,9 @@ class IonChannelGUI:
     f"Error accessing simulation data from model: {e}")
                         import traceback
                         traceback.print_exc()
-
-            # Save the plot data to a temporary file
             with open(data_file, 'w') as f:
                 json.dump({"plot_type": plot_type, "plot_data": plot_data}, f)
-
-            # Create a Python script to handle the plotting in a separate
-            # process
             script_file = os.path.join(temp_dir, "save_plot.py")
-
             with open(script_file, 'w') as f:
                 f.write("""
 import matplotlib
@@ -289,14 +210,11 @@ import os
 import sys
 import traceback
 from scipy.stats import pearsonr
-
 # Load the plot data
 with open(sys.argv[1], 'r') as f:
     data = json.load(f)
-
 plot_type = data["plot_type"]
 plot_data = data["plot_data"]
-
 # Get the project root directory from command line arguments (passed from
 # the parent script)
 project_root = sys.argv[2] if len(
@@ -305,18 +223,13 @@ project_root = sys.argv[2] if len(
             os.path.abspath(__file__)))
 data_dir = os.path.join(project_root, "data", "currents")
 os.makedirs(data_dir, exist_ok=True)
-
 # Get model type for filename, defaulting to "unknown" if not provided
 model_type = plot_data.get('model_type', 'unknown').lower().replace(' ', '_')
-
 # Create filename based on plot type and model type
 filename = f"{plot_type.lower().replace(' ', '_')}_{model_type}.png"
-
 # Full path to save the file
 file_path = os.path.join(data_dir, filename)
-
 # Print where the file will be saved for user information
-
 # Create the appropriate plot based on the plot type
 try:
     if plot_type == "Current Traces":
@@ -325,12 +238,10 @@ try:
         markov_current = plot_data.get('markov_current', [])
         hh_current = plot_data.get('hh_current', [])
         voltage = plot_data.get('voltage', 0)
-
         # Validate data before plotting
         if len(time_points) == 0 or len(
             markov_current) == 0 or len(hh_current) == 0:
             sys.exit(1)
-
         plt.figure(figsize=(10, 6))
         plt.plot(
     time_points,
@@ -347,30 +258,24 @@ try:
         plt.title(f"Ion Channel Current Traces at {voltage} mV")
         plt.grid(True)
         plt.legend()
-
     elif plot_type == "Current":
         # Extract current model data
         time_points = plot_data.get('time_points', [])
         currents = plot_data.get('currents', [])
         voltages = plot_data.get('voltages', [])
         model_type = plot_data.get('model_type', 'Unknown Model')
-
         # Validate data
         if len(time_points) == 0 or len(currents) == 0 or len(voltages) == 0:
             sys.exit(1)
-
         # Create a figure with two subplots (voltage protocol and current
         # responses)
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(
             10, 8), gridspec_kw={'height_ratios': [1, 3]})
-
         # Use a colormap to distinguish different voltage traces
         import matplotlib.cm as cm
         colors = cm.viridis(np.linspace(0, 1, len(currents)))
-
         # 1. Top subplot: Command Voltage Protocol
         ax1.set_title('Command Voltage Protocol')
-
         # Plot voltage protocols for each trace
         for i, voltage in enumerate(voltages):
             # Create simplified voltage protocol: hold at -80mV, step to test
@@ -379,7 +284,6 @@ try:
             holding_duration = 98  # ms
             step_duration = 102    # ms
             total_duration = 300   # ms
-
             # Create voltage protocol time points and values
             protocol_time = [
     0,
@@ -397,22 +301,18 @@ try:
     voltage,
     holding_voltage,
      holding_voltage]
-
             # Plot with the same color as the corresponding current trace
             ax1.plot(
     protocol_time,
     protocol_voltage,
     color=colors[i],
      label=f"{voltage} mV")
-
         ax1.set_ylabel('Voltage (mV)')
         ax1.set_xlim(0, 300)
         ax1.set_ylim(-120, 60)
         ax1.grid(True)
-
         # 2. Bottom subplot: Current Responses
         ax2.set_title(f"{model_type} Current Responses")
-
         # Plot each current trace with corresponding voltage label
         for i, (current, voltage) in enumerate(zip(currents, voltages)):
             # Ensure the time and current arrays have the same length
@@ -433,102 +333,74 @@ try:
     current,
     color=colors[i],
      label=f"{voltage} mV")
-
         ax2.set_xlabel("Time (ms)")
         ax2.set_ylabel("Current (pA)")
         ax2.grid(True, linestyle='--', alpha=0.6)
         ax2.set_xlim(0, 300)
-
         # Add legend with voltage values to the bottom of the figure
         handles, labels = ax2.get_legend_handles_labels()
         fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, 0), ncol=7,
                   title="Test Voltage", frameon=True)
-
         # Add extra space at bottom for the legend
         plt.subplots_adjust(bottom=0.15)
-
         # Adjust spacing between subplots
         plt.tight_layout(rect=[0, 0.05, 1, 0.95])
-
     else:
         sys.exit(1)
-
     # Save the figure with high resolution
     plt.savefig(file_path, dpi=300, bbox_inches='tight', format='png')
-
     # Clean up
     plt.close('all')
     gc.collect()
-
 except Exception as e:
     traceback.print_exc()
     plt.close('all')
     gc.collect()
     sys.exit(1)
     """)
-
-            # Ensure data/comparison directory exists
             root_dir = os.path.dirname(os.path.abspath(__file__))
             parent_dir = os.path.dirname(root_dir)
             data_dir = os.path.join(parent_dir, "data", "currents")
             os.makedirs(data_dir, exist_ok=True)
-
-            # Get the project root directory
             project_dir = os.path.dirname(
                 os.path.dirname(os.path.abspath(__file__)))
-
-            # Run the script with output capture for debugging - passing the
-            # project root directory
             process = subprocess.Popen(
                 [sys.executable, script_file, data_file, project_dir],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 universal_newlines=True)
-
-            # Get the output and wait for process to complete with a reasonable
-            # timeout
             try:
-                # Wait for the process to complete (up to 5 seconds should be
-                # plenty for plotting)
                 stdout, stderr = process.communicate(timeout=5.0)
                 if stdout:
                     print(f"Plot script output: {stdout}")
                 if stderr:
                     print(f"Plot script error: {stderr}")
-
-                # Check if the plot file was actually created
                 if hasattr(
                     self, 'current_model') and self.current_model is not None:
                     model_type = self.current_model.__class__.__name__.lower().replace(' ', '_')
                 else:
                     model_type = 'unknown'
-
                 filename = f"{plot_type.lower().replace(' ', '_')}_{model_type}.png"
                 plot_path = os.path.join(data_dir, filename)
                 if os.path.exists(plot_path):
-                    # Store the path to the most recently saved plot
                     self.last_saved_plot = plot_path
                 else:
                     print(f"Plot file was not created at: {plot_path}")
             except subprocess.TimeoutExpired:
-                process.kill()  # Kill the process if it takes too long
+                process.kill()                                         
                 print(
     f"Plot script timed out after 5 seconds, check logs for errors")
-
         except Exception as e:
             print(f"Error setting up save operation: {e}")
             import traceback
             traceback.print_exc()
-
     def setup_gui(self):
         """
         Creates and arranges the main graphical user interface elements.
-
         This includes sections for model selection, parameter configuration,
         voltage protocol definition, control buttons (e.g., "Run Simulation"),
         and the plotting areas for command voltage and current responses.
         """
-        # Model selection
         with dpg.collapsing_header(label="Model Selection", default_open=True):
             dpg.add_radio_button(
                 ("CTBN Markov", "Legacy Markov", "Hodgkin-Huxley", "Anticonvulsant Legacy Markov", "Anticonvulsant CTBN Markov"),
@@ -536,28 +408,18 @@ except Exception as e:
                 callback=self.on_model_change,
                 tag="model_selector"
             )
-
-        # Parameters section
         with dpg.collapsing_header(label="Model Parameters", default_open=True,
                                   tag="parameters_header"):
             self.setup_parameters()
-
-        # Voltage protocol
         with dpg.collapsing_header(label="Voltage Protocol", default_open=False, tag="protocol_header"):
             self.setup_protocol_widgets()
-
-        # Control buttons
         with dpg.group(horizontal=True):
             dpg.add_button(
                 label="Run Simulation",
                 callback=self.run_simulation)
-
-        # Main plot window
         with dpg.window(label="Plots", width=1100, height=800, pos=[300, 0]):
             with dpg.tab_bar():
-                # Current Traces
                 with dpg.tab(label="Current Traces"):
-                    # Command voltage protocol plot above current traces
                     with dpg.plot(label="Command Voltage Protocol", height=120, width=-1, tag="command_voltage_plot"):
                         dpg.add_plot_legend(
                             outside=True, tag="command_voltage_legend")
@@ -567,23 +429,18 @@ except Exception as e:
                         y_axis = dpg.add_plot_axis(
                             dpg.mvYAxis, label="Voltage (mV)")
                         dpg.set_axis_limits(y_axis, -120, 60)
-
-                    # Current traces plot
                     with dpg.group(horizontal=True):
                         dpg.add_text("Current Responses", color=[0, 150, 255])
-
                     with dpg.plot(label="Current Responses", height=350, width=-1, tag="current_plot"):
                         dpg.add_plot_legend(
                             outside=True, tag="current_plot_legend")
-                        # Add static tags to axes for stable referencing
                         dpg.add_plot_axis(
                             dpg.mvXAxis, label="Time (ms)", tag="current_plot_x_axis")
                         dpg.set_axis_limits("current_plot_x_axis", 0, 300)
                         dpg.add_plot_axis(
                             dpg.mvYAxis, label="Current (pA)", tag="current_plot_y_axis")
                         dpg.set_axis_limits("current_plot_y_axis", -500, 50)
-                        self.current_series = [] # Keep this to store series items if needed elsewhere
-
+                        self.current_series = []                                                      
     def setup_parameters(self):
         """
         Sets up the parameter input widgets in the GUI based on the currently selected model,
@@ -591,27 +448,21 @@ except Exception as e:
         """
         if dpg.does_item_exist("param_group"):
             dpg.delete_item("param_group")
-
         with dpg.group(tag="param_group", parent="parameters_header"):
             model = self.current_model
             model_name = self.current_model_name
-
             is_markov = "Markov" in model_name
             is_anticonvulsant = "Anticonvulsant" in model_name
             is_hh = model_name == "Hodgkin-Huxley"
-
             param_width = 150
-
             if is_markov:
                 dpg.add_text("Gate Parameters")
-                # Corrected attribute names based on legacy_markov.py
                 gate_config_map = {
                     "AL Gate": [("alcoeff", "alpha coefficient"), ("alslp", "alpha voltage depend")],
                     "BT Gate": [("btcoeff", "beta coefficient"), ("btslp", "beta voltage depend")],
                     "GM Gate": [("gmcoeff", "gamma coefficient"), ("gmslp", "gamma voltage depend")],
                     "DL Gate": [("dlcoeff", "delta coefficient"), ("dlslp", "delta voltage depend")],
                 }
-
                 for display_name, params_info in gate_config_map.items():
                     dpg.add_text(display_name)
                     for attr_name, label_text in params_info:
@@ -624,15 +475,13 @@ except Exception as e:
                                 tag=f"param_input_{attr_name}",
                                 width=param_width
                             )
-                
                 dpg.add_separator()
                 dpg.add_text("Transition Rate Parameters")
-                # Corrected attribute names based on legacy_markov.py
                 transition_params_info = [
-                    ("ConCoeff", "Base konIo (ConCoeff)"),   # From Kuo-Bean "Inactivation parameters"
-                    ("CoffCoeff", "Base koffIo (CoffCoeff)"), # From Kuo-Bean "Inactivation parameters"
-                    ("OpOnCoeff", "Base konOp (OpOnCoeff)"),  # From Kuo-Bean "Open state transitions"
-                    ("OpOffCoeff", "Base koffOp (OpOffCoeff)")# From Kuo-Bean "Open state transitions"
+                    ("ConCoeff", "Base konIo (ConCoeff)"),                                            
+                    ("CoffCoeff", "Base koffIo (CoffCoeff)"),                                          
+                    ("OpOnCoeff", "Base konOp (OpOnCoeff)"),                                          
+                    ("OpOffCoeff", "Base koffOp (OpOffCoeff)")                                        
                 ]
                 for attr_name, label_text in transition_params_info:
                     if hasattr(model, attr_name):
@@ -644,53 +493,40 @@ except Exception as e:
                             tag=f"param_input_{attr_name}",
                             width=param_width
                         )
-
                 dpg.add_separator()
-                # Changed to numchan
                 if hasattr(model, "numchan"): 
                     dpg.add_input_int(
                         label="Number of Channels",
                         default_value=int(getattr(model, "numchan", 100)),
                         callback=self.on_parameter_change,
-                        user_data="numchan", # Changed from num_channels
-                        tag="param_input_numchan", # Changed from num_channels
+                        user_data="numchan",                            
+                        tag="param_input_numchan",                            
                         width=param_width
                     )
-
             if is_anticonvulsant:
                 dpg.add_separator()
                 dpg.add_text("Anticonvulsant Drug Parameters")
-                
-                # Default to CBZ if no drug_type is set on the model yet
-                current_drug_type = "CBZ" # Changed default to CBZ to match model's first entry
+                current_drug_type = "CBZ"                                                      
                 if hasattr(model, 'drug_type') and model.drug_type:
                     current_drug_type = model.drug_type
                 elif hasattr(model, 'set_drug_type'): 
-                    model.set_drug_type(current_drug_type) # Initialize model's drug_type
-                    if hasattr(model, 'drug_type'): # re-fetch after setting
+                    model.set_drug_type(current_drug_type)                               
+                    if hasattr(model, 'drug_type'):                         
                         current_drug_type = model.drug_type
-
-
                 dpg.add_combo(
-                    # Updated to include all four drug types from legacy_markov.py
                     items=["CBZ", "LTG", "DPH"], 
                     label="Drug Type",
                     default_value=current_drug_type,
                     callback=self.on_drug_type_change, 
                     tag="drug_type_combo"
                 )
-
-                # Attribute names for BASE drug kinetic parameters, confirmed from _update_drug_rates
-                # and structure of AnticonvulsantMarkovModel.init_parameters
                 drug_params_display_to_attr = {
                     "Drug Conc. (µM)": "drug_concentration",
                 }
-                
                 for display_label, attr_name in drug_params_display_to_attr.items():
                     if hasattr(model, attr_name):
                         default_val = getattr(model, attr_name)
                         if default_val is None: default_val = 0.0 
-
                         dpg.add_input_float(
                             label=display_label,
                             default_value=float(default_val),
@@ -701,15 +537,12 @@ except Exception as e:
                         )
                     else:
                         print(f"Debug: Anticonvulsant model '{model_name}' is missing attribute '{attr_name}' for drug type '{current_drug_type}'")
-            
             if is_hh and not is_markov:
                 dpg.add_text("Hodgkin-Huxley Parameters")
                 for attr_name in self.parameter_names:
                     if hasattr(model, attr_name):
                         info = self.parameter_info.get(attr_name, {})
                         label_text = info.get('desc', attr_name)
-
-                        # Use input_int for 'numchan', float for others
                         if attr_name == "numchan":
                             dpg.add_input_int(
                                 label=label_text,
@@ -728,15 +561,12 @@ except Exception as e:
                                 tag=f"param_input_{attr_name}",
                                 width=param_width
                             )
-            
     def on_protocol_type_change(self, sender, app_data, user_data):
         """Callback for the protocol type radio button."""
         protocol_type = app_data
         is_custom = (protocol_type == "Custom")
-
         if dpg.does_item_exist("custom_protocol_widgets"):
             dpg.configure_item("custom_protocol_widgets", show=is_custom)
-
         if not is_custom:
             if protocol_type == "Default":
                 self.current_model.create_default_protocol()
@@ -749,46 +579,38 @@ except Exception as e:
                     self.current_model.create_steady_state_inactivation_protocol()
                 else:
                     print(f"Warning: {self.current_model_name} does not have 'create_steady_state_inactivation_protocol'.")
-            
             print(f"{protocol_type} protocol applied.")
-            self.update_plots() # Indented to be part of 'if not is_custom'
-
+            self.update_plots()                                            
     def on_parameter_change(self, sender, app_data, user_data):
         """
         Callback function invoked when a model parameter input field is changed.
-
         Args:
             sender: The tag of the input widget.
             app_data: The new value from the input widget.
             user_data: The attribute name (string) of the parameter to be changed.
         """
         model = self.current_model
-        param_key = user_data  # param_key is the attribute name on the model
-
+        param_key = user_data                                                
         try:
-            if param_key == "numchan": # Changed from num_channels
+            if param_key == "numchan":                            
                 setattr(model, param_key, int(app_data))
             elif param_key == "drug_concentration" and "Anticonvulsant" in self.current_model_name:
                 if hasattr(model, 'set_drug_concentration'):
                     model.set_drug_concentration(float(app_data))
-                else: # Fallback for models that might not have a setter
+                else:                                                   
                     setattr(model, param_key, float(app_data))
             else:
                 setattr(model, param_key, float(app_data))
-            
             self.update_plots()
         except ValueError:
             print(f"Error: Invalid input value '{app_data}' for parameter '{param_key}'. Please enter a valid number.")
         except Exception as e:
             print(f"An error occurred in on_parameter_change for {param_key}: {e}")
-
     def setup_protocol_widgets(self):
         """Sets up the voltage protocol widgets in the GUI."""
         self.voltage_step_tags = []
-        
         if dpg.does_item_exist("voltage_protocol_group"):
             dpg.delete_item("voltage_protocol_group")
-
         with dpg.group(parent="protocol_header", tag="voltage_protocol_group"):
             dpg.add_radio_button(
                 ["Default", "Inactivation", "Recovery", "Steady-State Inactivation", "Custom"],
@@ -797,7 +619,6 @@ except Exception as e:
                 default_value="Default",
                 tag="protocol_type_radio"
             )
-
             with dpg.group(tag="custom_protocol_widgets", show=False):
                 dpg.add_input_int(label="Holding Potential (mV)", default_value=-120, width=150, callback=self.on_protocol_change, tag="holding_potential")
                 dpg.add_input_int(label="Prepulse Duration (ms)", default_value=100, width=150, callback=self.on_protocol_change, tag="prepulse_duration")
@@ -809,20 +630,16 @@ except Exception as e:
                     tag = "voltage_step_0"
                     dpg.add_input_int(label="Step 1", default_value=0, width=150, callback=self.on_protocol_change, tag=tag)
                     self.voltage_step_tags.append(tag)
-
                 with dpg.group(horizontal=True):
                     dpg.add_button(label="Add Voltage Step", callback=self.add_voltage_step)
                     dpg.add_button(label="Remove Last Step", callback=self.remove_voltage_step)
-
                 dpg.add_button(label="Apply Custom Protocol", callback=self.apply_voltage_protocol)
-
     def on_protocol_change(self, sender, value):
         """
         A simple callback for protocol value changes to indicate that the
         custom protocol has been modified and needs to be re-applied.
         """
         print("Custom protocol modified. Click 'Apply Custom Protocol' to update.")
-
     def add_voltage_step(self):
         """Adds a new voltage step input field to the GUI."""
         step_num = len(self.voltage_step_tags)
@@ -836,7 +653,6 @@ except Exception as e:
             parent="voltage_steps_group"
         )
         self.voltage_step_tags.append(tag)
-
     def remove_voltage_step(self):
         """Removes the last added voltage step input field from the GUI."""
         if len(self.voltage_step_tags) > 1:
@@ -845,7 +661,6 @@ except Exception as e:
                 dpg.delete_item(tag_to_remove)
         else:
             print("Cannot remove the last voltage step.")
-    
     def apply_voltage_protocol(self):
         """
         Applies the custom voltage protocol settings from the GUI to the model.
@@ -856,7 +671,6 @@ except Exception as e:
             pulse_duration = dpg.get_value("pulse_duration")
             postpulse_duration = dpg.get_value("postpulse_duration")
             voltage_steps = [dpg.get_value(tag) for tag in self.voltage_step_tags]
-
             self.current_model.V_hold = holding_potential
             self.current_model.prepulse_duration = prepulse_duration
             self.current_model.pulse_duration = pulse_duration
@@ -864,88 +678,63 @@ except Exception as e:
             self.current_model.voltages = voltage_steps
             self.current_model.makeprotocol()
             print("Custom protocol applied.")
-            self.update_plots() # Indented to be part of 'try' block
-
-        except Exception as e: # Aligned with 'try' block
+            self.update_plots()                                     
+        except Exception as e:                           
             print(f"Error applying custom protocol: {e}")
-
     def update_plots(self):
         """
         Refreshes all plots in the GUI with the latest simulation data.
-
         This method first calls `_clear_all_plots()` to ensure a clean slate,
         then calls `update_voltage_plot()` and `update_current_plot()` to
         redraw the command voltage and current response traces.
         """
-        # Clear all existing plots and legends
         self._clear_all_plots()
-
-        # Reset any stored plot data
         if hasattr(self, 'current_series'):
             self.current_series = []
         if hasattr(self, 'voltage_series'):
             self.voltage_series = []
-
-        # Update all plots
         self.update_voltage_plot()
         self.update_current_plot()
-
     def update_voltage_plot(self):
         """
         Updates the 'Command Voltage Protocol' plot with data from `self.sim_results`.
-
         This method iterates through the simulation results, reconstructs the
         voltage trace for each sweep using the 'protocol' data, and adds it
         as a new line series to the voltage plot.
         """
         if not hasattr(self, 'sim_results') or not self.sim_results:
             return
-
         if not dpg.does_item_exist("voltage_plot_y_axis"):
             print("Could not find voltage plot y-axis")
             return
-
         sorted_results = sorted(
             self.sim_results,
             key=lambda x: x.get('step_volt', 0),
             reverse=True)
-
         for res in sorted_results:
             if 'protocol' not in res or not res['protocol']:
                 continue
-
             protocol = res['protocol']
             step_volt = res.get('step_volt', 0)
-
-            # Reconstruct voltage trace from protocol data
             holding_v = protocol.get('holding', -120)
             holding_dur = protocol.get('holding_duration', 100)
             test_v = protocol.get('test', 0)
             test_dur = protocol.get('test_duration', 200)
             tail_v = protocol.get('tail', -120)
             tail_dur = protocol.get('tail_duration', 0)
-
             time_points = [0]
             voltage_points = [holding_v]
-
             time_points.extend([holding_dur, holding_dur])
             voltage_points.extend([holding_v, test_v])
-
             time_points.extend([holding_dur + test_dur, holding_dur + test_dur])
             voltage_points.extend([test_v, tail_v])
-            
             total_duration = holding_dur + test_dur + tail_dur
             time_points.append(total_duration)
             voltage_points.append(tail_v)
-
-            # Ensure plot extends to 300ms to match current plot
             if total_duration < 300:
                 time_points.append(300)
                 voltage_points.append(tail_v)
-
             label = f"{int(step_volt)} mV"
-
-            # Add the new line series to the plot
             dpg.add_line_series(
                 x=time_points,
                 y=voltage_points,
@@ -958,17 +747,15 @@ except Exception as e:
         Each plot is handled independently with its own error checking and recreation logic.
         Relevant y_axis and series attributes are reset.
         """
-        # --- Voltage Plot ---
         voltage_plot_tag = "command_voltage_plot"
-        voltage_y_axis_tag = "voltage_plot_y_axis" # Expected by update_voltage_plot
+        voltage_y_axis_tag = "voltage_plot_y_axis"                                  
         voltage_legend_tag = "command_voltage_legend"
-        voltage_x_axis_tag = "command_voltage_plot_x_axis" # For consistency
-
+        voltage_x_axis_tag = "command_voltage_plot_x_axis"                  
         try:
             if dpg.does_item_exist(voltage_plot_tag):
                 parent_item = dpg.get_item_parent(voltage_plot_tag)
-                if parent_item:  # Ensure parent is valid
-                    dpg.delete_item(voltage_plot_tag)  # Deletes plot and all its children
+                if parent_item:                          
+                    dpg.delete_item(voltage_plot_tag)                                     
                     with dpg.plot(label="Command Voltage Protocol", height=150, width=-1,
                                   tag=voltage_plot_tag, parent=parent_item):
                         dpg.add_plot_legend(outside=True, tag=voltage_legend_tag)
@@ -976,93 +763,76 @@ except Exception as e:
                         dpg.set_axis_limits(x_axis, 0, 300)
                         y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="Voltage (mV)", tag=voltage_y_axis_tag)
                         dpg.set_axis_limits(y_axis, -140, 60)
-                        self.voltage_y_axis = y_axis  # Store the new y-axis ID
-                        self.voltage_series = []      # Reset series list
+                        self.voltage_y_axis = y_axis                           
+                        self.voltage_series = []                         
                 else:
                     print(f"Warning: Parent for plot '{voltage_plot_tag}' not found. Plot not cleared or recreated.")
-                    self.voltage_y_axis = 0  # Mark as invalid
+                    self.voltage_y_axis = 0                   
                     self.voltage_series = []
             else:
-                # Plot doesn't exist, ensure attributes are reset.
                 print(f"Info: Plot '{voltage_plot_tag}' did not exist. Not recreated by _clear_all_plots.")
                 self.voltage_y_axis = 0
                 self.voltage_series = []
-
         except Exception as e:
             print(f"Error processing voltage plot ('{voltage_plot_tag}') in _clear_all_plots: {e}")
             self.voltage_y_axis = 0
             self.voltage_series = []
-            # Attempt to delete the plot item if it somehow still exists after an error
             if dpg.does_item_exist(voltage_plot_tag):
                 try:
                     dpg.delete_item(voltage_plot_tag)
                 except Exception as del_e:
                     print(f"Error during cleanup of '{voltage_plot_tag}': {del_e}")
-
-        # --- Current Plot ---
         current_plot_tag = "current_plot"
-        current_y_axis_tag = "current_plot_y_axis" # For consistency and explicit access
+        current_y_axis_tag = "current_plot_y_axis"                                      
         current_legend_tag = "current_plot_legend"
-        current_x_axis_tag = "current_plot_x_axis" # For consistency
-
+        current_x_axis_tag = "current_plot_x_axis"                  
         try:
             if dpg.does_item_exist(current_plot_tag):
                 parent_item = dpg.get_item_parent(current_plot_tag)
-                if parent_item:  # Ensure parent is valid
-                    dpg.delete_item(current_plot_tag)  # Deletes plot and all its children
+                if parent_item:                          
+                    dpg.delete_item(current_plot_tag)                                     
                     with dpg.plot(label="Current Responses", height=350, width=-1,
                                   tag=current_plot_tag, parent=parent_item):
                         dpg.add_plot_legend(outside=True, tag=current_legend_tag)
                         x_axis = dpg.add_plot_axis(dpg.mvXAxis, label="Time (ms)", tag=current_x_axis_tag)
                         dpg.set_axis_limits(x_axis, 0, 300)
                         y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="Current (pA)", tag=current_y_axis_tag)
-                        dpg.set_axis_limits(y_axis, -500, 50)  # Default limits
-                        self.current_y_axis = y_axis  # Store the new y-axis ID
-                        self.current_series = []      # Reset series list
+                        dpg.set_axis_limits(y_axis, -500, 50)                  
+                        self.current_y_axis = y_axis                           
+                        self.current_series = []                         
                 else:
                     print(f"Warning: Parent for plot '{current_plot_tag}' not found. Plot not cleared or recreated.")
-                    self.current_y_axis = 0  # Mark as invalid
+                    self.current_y_axis = 0                   
                     self.current_series = []
             else:
-                # Plot doesn't exist, ensure attributes are reset.
                 print(f"Info: Plot '{current_plot_tag}' did not exist. Not recreated by _clear_all_plots.")
                 self.current_y_axis = 0
                 self.current_series = []
-
         except Exception as e:
             print(f"Error processing current plot ('{current_plot_tag}') in _clear_all_plots: {e}")
             self.current_y_axis = 0
             self.current_series = []
-            # Attempt to delete the plot item if it somehow still exists after an error
             if dpg.does_item_exist(current_plot_tag):
                 try:
                     dpg.delete_item(current_plot_tag)
                 except Exception as del_e:
                     print(f"Error during cleanup of '{current_plot_tag}': {del_e}")
-
     def update_current_plot(self):
         """
         Updates the 'Current Responses' plot with data from `self.sim_results`.
         This version uses static tags for axes and avoids legend recreation for stability.
         """
-        self.current_series = []  # Reset the list of series items
-
-        # Initialize plot data for auto-save
+        self.current_series = []                                  
         plot_data = {
             'time_points': [],
             'currents': [],
             'voltages': [],
             'model_type': str(self.current_model.__class__.__name__) if self.current_model else "Unknown"
         }
-
         current_y_axis_tag = "current_plot_y_axis"
-
-        # Ensure the Y-axis exists before proceeding
         if not dpg.does_item_exist(current_y_axis_tag):
             print(f"Error: Y-axis with tag '{current_y_axis_tag}' not found. Cannot update current plot.")
-            # Attempt to clear series from plot if axis doesn't exist but plot does
             if dpg.does_item_exist("current_plot"):
-                # Fallback: try to clear series from the plot itself if axis tag is missing
                 children_dict = dpg.get_item_children("current_plot")
                 if children_dict:
                     for slot_items in children_dict.values():
@@ -1070,185 +840,121 @@ except Exception as e:
                             if dpg.get_item_type(item_in_slot) == "mvAppItemType::mvLineSeries":
                                 dpg.delete_item(item_in_slot)
             return
-
-        # Clear existing line series from the Y-axis
-        # dpg.get_item_children returns a dictionary like {slot_id: [item_ids]}
         children_dict = dpg.get_item_children(current_y_axis_tag)
         if children_dict:
-            for slot_items in children_dict.values(): # Iterate through lists of items in each slot
+            for slot_items in children_dict.values():                                              
                 for item in slot_items:
                     if dpg.does_item_exist(item) and dpg.get_item_type(item) == "mvAppItemType::mvLineSeries":
                         dpg.delete_item(item)
-        
-        # Do NOT delete and recreate the legend ("current_plot_legend").
-        # Dear PyGui handles legend updates automatically when series with labels are added/removed.
-
         if not self.sim_results:
-            # Ensure axis limits are reasonable if no data
             if dpg.does_item_exist(current_y_axis_tag):
-                dpg.set_axis_limits(current_y_axis_tag, -1.0, 1.0) # Default view
+                dpg.set_axis_limits(current_y_axis_tag, -1.0, 1.0)               
             return
-
-        # Sort results by voltage for consistent coloring
         sorted_results = sorted(
             self.sim_results,
-            key=lambda x: x.get('step_volt', 0), # Use .get for safety
+            key=lambda x: x.get('step_volt', 0),                      
             reverse=True
         )
-
         min_current_val = 0.0
         max_current_val = 0.0
-        self.temp_scaled_data = [] # Reset temp_scaled_data
-
+        self.temp_scaled_data = []                         
         for res_idx, res in enumerate(sorted_results):
             try:
                 time_data = res.get('time')
                 current_data = res.get('sim_swp')
                 volt = res.get('step_volt', 'N/A')
-
                 if time_data is None or current_data is None or len(current_data) == 0:
                     continue
-
-                # Ensure numpy arrays for processing
                 if not isinstance(time_data, np.ndarray): time_data = np.array(time_data)
                 if not isinstance(current_data, np.ndarray): current_data = np.array(current_data)
-
-
                 if current_data.ndim > 1:
                     current_data = current_data.flatten()
-
                 if len(time_data) != len(current_data):
-                    time_data = np.linspace(0, len(current_data) * 0.005, len(current_data)) # Default dt 0.005s = 5us
-
-                if len(current_data) < 3 : # Not enough data for smoothing or other processing
+                    time_data = np.linspace(0, len(current_data) * 0.005, len(current_data))                          
+                if len(current_data) < 3 :                                                    
                     self.temp_scaled_data.append({
                         'voltage': volt, 'time': time_data, 'current': current_data,
                         'original_min': np.min(current_data) if len(current_data) > 0 else 0
                     })
                     continue
-
-
-                # Apply smoothing (Savitzky-Golay like, using mean for simplicity here)
                 window_size = 101
-                if window_size > len(current_data): # Adjust window size if data is too short
-                    window_size = max(3, (len(current_data) // 2) * 2 -1 ) # Ensure odd and at least 3
-
+                if window_size > len(current_data):                                          
+                    window_size = max(3, (len(current_data) // 2) * 2 -1 )                            
                 if window_size >=3 and len(current_data) >= window_size:
-                    # Padded mean smoothing
                     pad_width = window_size // 2
                     padded_current = np.pad(current_data, pad_width, mode='edge')
                     smoothed_current_list = [np.mean(padded_current[i : i + window_size]) for i in range(len(current_data))]
                     current_data = np.array(smoothed_current_list)
-
-                # --- Start of Data Processing (Alignment, Flatlining, Limiting) ---
-                # This complex processing block should be carefully reviewed for correctness
-                # Ensure all array indexing is safe and logic aligns with scientific goals.
-
-                # 1. Align peak to 98ms
                 peak_idx = np.argmin(current_data)
                 current_peak_time = time_data[peak_idx]
-                target_peak_time = 98.0  # ms
+                target_peak_time = 98.0      
                 time_shift = target_peak_time - current_peak_time
                 time_data = time_data + time_shift
-
-                # 2. Ensure time array starts at 0ms and extends to at least 300ms
                 if time_data[0] > 0:
                     prepend_time = np.array([0.0])
                     prepend_current = np.array([current_data[0]])
                     time_data = np.concatenate((prepend_time, time_data))
                     current_data = np.concatenate((prepend_current, current_data))
-
                 if time_data[-1] < 300.0:
                     last_time = time_data[-1]
-                    # Ensure a few points for extension if close to 300ms
                     num_extra_points = max(2, int(len(time_data) * (300.0 - last_time) / (last_time if last_time > 0 else 1.0)))
-                    extra_times = np.linspace(last_time, 300.0, num_extra_points + 1)[1:] # Avoid duplicating last_time
+                    extra_times = np.linspace(last_time, 300.0, num_extra_points + 1)[1:]                              
                     extra_currents = np.full_like(extra_times, current_data[-1])
                     time_data = np.concatenate((time_data, extra_times))
                     current_data = np.concatenate((current_data, extra_currents))
-                
-                # 3. Pre-97ms flatlining
                 idx_97ms = np.argmin(np.abs(time_data - 97.0))
                 value_at_97ms = current_data[idx_97ms]
                 current_data[:idx_97ms] = value_at_97ms
-
-                # 4. Post-105ms flatlining
                 idx_105ms = np.argmin(np.abs(time_data - 105.0))
                 flatline_value = current_data[idx_105ms]
                 current_data[idx_105ms:] = flatline_value
-                
-                # 5. Limit extreme current values above 0.25 pA
-                current_limit_val = 0.25  # pA
+                current_limit_val = 0.25      
                 current_data[current_data > current_limit_val] = current_limit_val
-                # --- End of Data Processing ---
-
                 self.temp_scaled_data.append({
                     'voltage': volt,
                     'time': time_data,
                     'current': current_data,
                     'original_min': np.min(current_data) if len(current_data) > 0 else 0.0
                 })
-
             except IndexError as ie:
                 print(f"IndexError processing sweep for current plot at {res.get('step_volt', 'N/A')}mV: {str(ie)}. Data length: T={len(res.get('time',[]))}, C={len(res.get('sim_swp',[]))}")
             except Exception as e:
                 print(f"Error processing sweep for current plot at {res.get('step_volt', 'N/A')}mV: {str(e)}")
                 import traceback
                 traceback.print_exc()
-        
-        # Uniform scaling and plotting from self.temp_scaled_data
         if self.temp_scaled_data:
-            # Use the time array from the first processed sweep for plot_data['time_points']
-            # This assumes all sweeps should align to a common processed time axis for saving.
             if self.temp_scaled_data[0]['time'] is not None and len(self.temp_scaled_data[0]['time']) > 0:
                 plot_data['time_points'] = self.temp_scaled_data[0]['time'].tolist()
-
             for data_item_idx, data_item in enumerate(self.temp_scaled_data):
                 current_to_plot = data_item['current']
                 time_to_plot = data_item['time']
-                
                 if len(current_to_plot) == 0 or len(time_to_plot) == 0:
                     continue
-
                 min_current_val = min(min_current_val, np.min(current_to_plot))
                 max_current_val = max(max_current_val, np.max(current_to_plot))
-
                 time_list = time_to_plot.tolist()
                 current_list = current_to_plot.tolist()
-
                 series = dpg.add_line_series(
                     time_list, current_list,
                     label=f"{int(data_item['voltage'])}mV",
                     parent=current_y_axis_tag
                 )
-                self.current_series.append(series) # Keep track of series items
-                
-                # For saving, each current trace might have its own slightly different time points
-                # due to processing. If a common time axis is not strict, save individual times.
-                # However, the current plot_data structure expects one 'time_points'.
-                # For now, we use the first sweep's time points for 'plot_data'.
-                # Consider revising plot_data structure if individual time axes per sweep are needed for saving.
+                self.current_series.append(series)                             
                 plot_data['currents'].append(current_list)
                 plot_data['voltages'].append(int(data_item['voltage']))
-
-        # Set y-axis limits based on all plotted data
         if dpg.does_item_exist(current_y_axis_tag):
-            y_min_limit, y_max_limit = -1.0, 1.0 # Default if no data
-            if self.temp_scaled_data: # Only adjust if there was data
+            y_min_limit, y_max_limit = -1.0, 1.0                     
+            if self.temp_scaled_data:                                
                 if min_current_val < 0:
                     y_min_limit = min_current_val * 1.1
                     y_max_limit = max(max_current_val * 1.1, -min_current_val * 0.1, 0.1) 
-                else: # min_current_val >= 0
-                    y_min_limit = 0.0 # Start from 0 if all currents are positive or zero
+                else:                       
+                    y_min_limit = 0.0                                                    
                     y_max_limit = max(max_current_val * 1.1, 0.1) 
-                
-                if abs(y_max_limit - y_min_limit) < 1e-9: # Avoid y_min == y_max
+                if abs(y_max_limit - y_min_limit) < 1e-9:                       
                     y_max_limit = y_min_limit + 0.1 
-            
             dpg.set_axis_limits(current_y_axis_tag, y_min_limit, y_max_limit)
-        
-        # Auto-save plot data
-        if plot_data['currents']: # Check if any current data was actually added
+        if plot_data['currents']:                                               
             if hasattr(self, 'current_model') and self.current_model is not None:
                 model_name = self.current_model.__class__.__name__
                 plot_data['model_type'] = model_name
@@ -1257,18 +963,13 @@ except Exception as e:
                 elif 'HH' in model_name: model_suffix = 'hhmodel'
                 else: model_suffix = 'model'
                 plot_data['model_suffix'] = model_suffix
-            
-            # Ensure time_points is populated for saving
             if not plot_data['time_points'] and self.temp_scaled_data and self.temp_scaled_data[0]['time'] is not None:
                 plot_data['time_points'] = self.temp_scaled_data[0]['time'].tolist()
-
-            if plot_data['time_points']: # Only save if we have time points
+            if plot_data['time_points']:                                   
                 self.save_plot_to_file("Current", plot_data)
-
     def run_simulation(self):
         """
         Executes the simulation based on the current model, parameters, and protocol.
-
         This method performs the following steps:
         1. Clears previous simulation results and plots.
         2. Collects the current model parameters.
@@ -1295,55 +996,35 @@ except Exception as e:
         to automatically save the generated plot.
         9. Displays a success or error message to the user.
         """
-        # Clear previous results and plots before starting new simulation
         self.sim_results = []
         self._clear_all_plots()
-
-        # Explicitly update all model parameters from GUI widgets before running
-        # This ensures the latest values are used, even if input fields haven't lost focus
         for param_name in self.parameter_names:
             widget_tag = f"param_input_{param_name}"
             if dpg.does_item_exist(widget_tag):
                 current_gui_value = dpg.get_value(widget_tag)
                 setattr(self.current_model, param_name, current_gui_value)
-
-        # Create parameter dictionary
         parameters = {}
-
-        # Add model-specific parameters
         for param in self.parameter_names:
             value = getattr(self.current_model, param)
             parameters[param] = value
-
-        # Add flags to tell the worker which model to instantiate
         parameters['is_hh_model'] = isinstance(self.current_model, HHModel)
         parameters['use_ctbn'] = isinstance(self.current_model, (CTBNMarkovModel, AnticonvulsantCTBNMarkovModel))
         parameters['is_anticonvulsant_model'] = isinstance(self.current_model, (AnticonvulsantMarkovModel, AnticonvulsantCTBNMarkovModel))
-
-        # Pass drug_type for anticonvulsant models
         if parameters['is_anticonvulsant_model']:
             if hasattr(self.current_model, 'drug_type'):
                 parameters['drug_type'] = self.current_model.drug_type
-
-        # Get protocol from current model - handle different formats for each model
         swp_seq = []
         if hasattr(self.current_model, 'SwpSeq') and hasattr(self.current_model, 'NumSwps'):
-            # For both models - convert NumPy array protocol to list of dicts for worker
             swp_array = self.current_model.SwpSeq
             num_swps = self.current_model.NumSwps
-
             for sweep_no in range(num_swps):
-                # Convert protocol format to dictionary format
-                if sweep_no < swp_array.shape[1]:  # Make sure sweep_no is valid
-                    # Extract protocol parameters from swp_array
+                if sweep_no < swp_array.shape[1]:                               
                     holding_potential = swp_array[2, sweep_no]
                     holding_end_samples = swp_array[3, sweep_no]
                     target_voltage = swp_array[4, sweep_no]
                     test_end_samples = swp_array[5, sweep_no]
                     tail_potential = swp_array[6, sweep_no]
                     tail_end_samples = swp_array[7, sweep_no]
-
-                    # Calculate durations in ms (assuming 0.005 ms per sample)
                     sampling_interval_ms = 0.005
                     holding_duration_ms = holding_end_samples * sampling_interval_ms
                     test_duration_ms = (test_end_samples - holding_end_samples) * sampling_interval_ms
@@ -1363,70 +1044,47 @@ except Exception as e:
                         'tail_clamp': 0
                     }
                     swp_seq.append(sweep_dict)
-
         elif hasattr(self.current_model, 'SwpSeq') and isinstance(self.current_model.SwpSeq, list):
-            # For legacy models that use a list of dicts
             for sweep_dict in self.current_model.SwpSeq:
-                swp_seq.append(sweep_dict.copy())  # Use a copy
-
+                swp_seq.append(sweep_dict.copy())              
         if not swp_seq:
             self.show_message_dialog("Error", "No voltage protocol defined for the current model.")
             return
-
-        # Start simulation in a separate thread to keep the GUI responsive
         simulation_thread = threading.Thread(
             target=self.run_simulation_thread,
             args=(parameters, swp_seq)
         )
         simulation_thread.start()
-
     def run_simulation_thread(self, parameters, swp_seq):
         """
         Runs the simulation sweeps in a separate process pool to keep the GUI responsive.
-
         This method sets up a multiprocessing Pool to execute each simulation sweep
         in a separate worker process. This prevents the main GUI thread from blocking.
-
         Args:
             parameters (dict): A dictionary of parameters for the simulation model.
             swp_seq (list): A list of dictionaries, where each defines a voltage protocol sweep.
         """
         try:
             num_swps = len(swp_seq)
-            # Prepare arguments for each sweep. The worker function expects a list of sweeps,
-            # so we wrap each individual sweep's dictionary in a list.
             sweep_args = [(i, parameters, [swp_seq[i]]) for i in range(num_swps)]
-
-            # Use a process pool to run sweeps in parallel, improving performance.
             with Pool() as pool:
                 results = pool.map(run_single_sweep, sweep_args)
-
-            # Filter out failed sweeps before processing results.
             successful_results = [res for res in results if res and 'sim_swp' in res and len(res['sim_swp']) > 0]
-
             if successful_results:
-                # Sort results by sweep number to ensure correct plotting order.
                 self.sim_results = sorted(successful_results, key=lambda x: x['sweep_no'])
-
-                # Schedule plot update on the main GUI thread.
                 dpg.split_frame()
                 self.update_plots()
             else:
                 self.show_message_dialog("Error", "Simulation failed for all sweeps. Check console for details.")
-
         except Exception as e:
             import traceback
             traceback.print_exc()
             self.show_message_dialog("Error", f"An unexpected error occurred during simulation: {e}")
         finally:
-            # Ensure garbage collection is run to free up memory.
             gc.collect()
-
     def show_message_dialog(self, title, message):
-
         """
         Displays a modal message dialog to the user.
-
         Args:
             message (str): The text message to display in the dialog.
             title (str, optional): The title of the modal dialog window.
@@ -1439,11 +1097,9 @@ except Exception as e:
         with dpg.window(label=title, modal=True, no_close=False, width=400) as modal_id:
             dpg.add_text(message)
             dpg.add_button(label="OK", width=75, callback=lambda: dpg.delete_item(modal_id))
-
     def on_model_change(self, sender, app_data):
         """
         Callback function invoked when the selected simulation model changes.
-
         Based on the `value` from the model selection dropdown:
         - Sets `self.current_model` to the appropriate model instance
             (CTBNMarkovModel, MarkovModel, or HHModel).
@@ -1452,7 +1108,6 @@ except Exception as e:
         - Calls `setup_parameters()` to refresh the parameter input fields in the GUI.
         - Calls `setup_voltage_protocol()` to refresh the voltage protocol section.
         - Calls `update_plots()` to clear and prepare plots for the new model.
-
         Args:
             sender (str or int): The tag of the GUI combo box that triggered the callback.
             value (str): The string value of the selected model
@@ -1460,47 +1115,37 @@ except Exception as e:
         """
         if app_data == "CTBN Markov":
             self.current_model = self.ctbn_markov_model
-            self.current_model_name = app_data  # Update current_model_name
+            self.current_model_name = app_data                             
             self.parameter_names = self.markov_parameters
             self.parameter_info = self.markov_parameter_info
         elif app_data == "Legacy Markov":
             self.current_model = self.legacy_markov_model
-            self.current_model_name = app_data  # Update current_model_name
+            self.current_model_name = app_data                             
             self.parameter_names = self.markov_parameters
             self.parameter_info = self.markov_parameter_info
         elif app_data == "Hodgkin-Huxley":
             self.current_model = self.legacy_hh_model
-            self.current_model_name = app_data  # Update current_model_name
+            self.current_model_name = app_data                             
             self.parameter_names = self.hh_parameters
             self.parameter_info = self.hh_parameter_info
         elif app_data == "Anticonvulsant Legacy Markov":
             self.current_model = self.anticonvulsant_markov_model
-            self.current_model_name = app_data  # Update current_model_name
+            self.current_model_name = app_data                             
             self.parameter_names = self.anticonvulsant_markov_parameters
             self.parameter_info = self.anticonvulsant_markov_parameter_info
         elif app_data == "Anticonvulsant CTBN Markov":
             self.current_model = self.anticonvulsant_ctbn_markov_model
-            self.current_model_name = app_data  # Update current_model_name
+            self.current_model_name = app_data                             
             self.parameter_names = self.anticonvulsant_markov_parameters
             self.parameter_info = self.anticonvulsant_markov_parameter_info
-
-        # Clear previous simulation results and related data when model changes
         self.sim_results = []
         self.last_plot_data = {}
-
-        # Update parameter display
         self.setup_parameters()
-
-        # Update voltage protocol
         self.setup_protocol_widgets()
-
-        # Update all plots with new model
         self.update_plots()
-
     def start(self):
         """
         Initializes and starts the DearPyGui application.
-
         This method performs the final steps to launch the GUI:
         - Makes the viewport visible.
         - Sets the primary window.
@@ -1511,10 +1156,7 @@ except Exception as e:
         dpg.set_primary_window("primary_window", True)
         dpg.start_dearpygui()
         dpg.destroy_context()
-
 if __name__ == '__main__':
-    # Main entry point for the application.
-    # Initializes and starts the IonChannelGUI.
     freeze_support()
     app = IonChannelGUI()
     app.start()
