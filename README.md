@@ -2,14 +2,16 @@
 
 [![DOI](https://zenodo.org/badge/998520127.svg)](https://doi.org/10.5281/zenodo.15625711)
 
-A GUI application and associated scripts for simulating voltage-gated sodium channel models, showcasing CTBN Markov model's advantages over the Legacy Hodgkin-Huxley and Markov models. It showcases sodium current traces with customizable parameters and voltage protocols, allowing users to explore the differences between Hodgkin-Huxley, CTBN Markov, and legacy Markov models. The `data` directory contains data generated from model comparisons and figures used in the associated paper.
+This repository contains a GUI application and associated scripts for simulating voltage-gated sodium channel models, implemented as a proof-of-principle. The code accompanies the paper "Efficient fully stochastic modelling of voltage-gated ion channels using Bayesian networks" by Hannah G. Wimpy. It showcases the advantages of CTBN (Continuous-Time Bayesian Network) Markov models over Legacy Hodgkin-Huxley and traditional Markov models for simulating sodium channel behavior. The application allows for the visualization of sodium current traces with customizable parameters and voltage protocols, enabling users to explore the differences between these modeling approaches. The `data` directory contains data generated from model comparisons and figures used in the associated paper.
 
 ## Features
 
-*   Simulates sodium current traces using three different models:
+*   Simulates sodium current traces using several models:
     *   Continuous-Time Bayesian Networks (CTBN) Markov
     *   Legacy Markov
     *   Hodgkin-Huxley
+    *   Anticonvulsant CTBN Markov
+    *   Anticonvulsant Legacy Markov
 *   Allows customization of model parameters.
 *   Provides a flexible interface to define custom voltage protocols.
 *   Generates and displays sodium current traces.
@@ -59,7 +61,7 @@ python src/main.py
 
 **Using the GUI:**
 
-1.  **Select a Model**: Choose between "CTBN Markov", "Legacy Markov", or "Hodgkin-Huxley" from the "Model Selection" dropdown.
+1.  **Select a Model**: Choose between "CTBN Markov", "Legacy Markov", "Hodgkin-Huxley", "Anticonvulsant CTBN Markov", or "Anticonvulsant Legacy Markov" from the "Model Selection" dropdown.
 2.  **Adjust Parameters**: Modify model-specific parameters under the "Model Parameters" section.
 3.  **Define Voltage Protocol**: Customize the voltage protocol settings (Holding Potential, Durations, Test Voltages) under the "Voltage Protocol" section. Add or remove voltage steps as needed and click "Apply Protocol".
 4.  **Run Simulation**: Click the "Run Simulation" button.

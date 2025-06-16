@@ -1111,7 +1111,14 @@ class IonChannelGUI():
         dpg.set_primary_window('primary_window', True)
         dpg.start_dearpygui()
         dpg.destroy_context()
-if (__name__ == '__main__'):
-    freeze_support()
+def main():
+    """
+    Main entry point for the CTBN Voltage-Gated Ion Channel GUI application.
+    Initializes and starts the IonChannelGUI.
+    """
+    freeze_support()  # Important for multiprocessing, especially on Windows
     app = IonChannelGUI()
     app.start()
+
+if __name__ == '__main__':
+    main()
