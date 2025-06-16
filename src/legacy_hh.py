@@ -3,25 +3,7 @@ Implements a Hodgkin-Huxley (HH) type ion channel model.
 
 This module defines the `HHModel` class, which represents a classical
 Hodgkin-Huxley model, primarily configured for simulating sodium channel
-dynamics. The model includes:
--   Initialization with biophysical parameters (conductance, reversal potentials,
-    capacitance), ionic concentrations, and default gating variable states.
--   Voltage-dependent activation (m-gates) and inactivation (h-gate) kinetics,
-    with methods to calculate alpha and beta rate constants.
--   Pre-computation of rate constants and Goldman-Hodgkin-Katz (GHK) current
-    factors over a defined voltage range for efficiency.
--   A `Sweep` method that simulates the channel's response to voltage clamp
-    protocols by numerically integrating the differential equations for the
-    gating variables using `scipy.integrate.solve_ivp`.
--   Calculation of macroscopic sodium current based on gating variable states
-    and membrane potential using the GHK formulation.
--   Utility methods to generate standard voltage clamp protocols, such as
-    those for measuring activation, recovery from inactivation, and
-    steady-state inactivation.
-
-Dependencies:
--   `numpy` for numerical array operations.
--   `scipy.integrate.solve_ivp` for solving ordinary differential equations.
+dynamics. 
 """
 import numpy as np
 from scipy.integrate import solve_ivp
