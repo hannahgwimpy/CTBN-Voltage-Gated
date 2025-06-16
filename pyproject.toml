@@ -33,7 +33,7 @@ dependencies = [
 "Bug Tracker" = "https://github.com/hannahgwimpy/CTBN-Voltage-Gated/issues" 
 
 [project.scripts]
-CTBN-Voltage-Gated = "src.main:main"
+CTBN-Voltage-Gated = "main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
