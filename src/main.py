@@ -1,3 +1,23 @@
+"""
+Main application entry point for the Ion Channel Simulator GUI.
+
+This module initializes and runs the `IonChannelGUI` application, which provides
+a graphical user interface for simulating various sodium channel models, including
+Hodgkin-Huxley, 13-state Markov, and 24-state anticonvulsant Markov models,
+as well as their CTBN (Continuous-Time Bayesian Network) counterparts.
+
+The GUI allows users to:
+- Select different ion channel models.
+- Adjust model parameters.
+- Define and apply voltage clamp protocols.
+- Run simulations and visualize results (e.g., current traces, state occupancies).
+- Manage drug types and concentrations for anticonvulsant models.
+
+It utilizes `dearpygui` for the GUI framework and `multiprocessing` for
+running simulations in parallel to maintain UI responsiveness.
+The actual model logic is imported from `legacy_hh.py`, `legacy_markov.py`,
+and `ctbn_markov.py`. The `worker.py` module handles individual sweep simulations.
+"""
 import dearpygui.dearpygui as dpg
 import numpy as np
 import sys
@@ -9,7 +29,59 @@ from ctbn_markov import CTBNMarkovModel, AnticonvulsantCTBNMarkovModel
 from legacy_markov import MarkovModel, AnticonvulsantMarkovModel
 from legacy_hh import HHModel
 class IonChannelGUI():
+    """
+    Manages the Ion Channel Simulator's graphical user interface and operations.
+
+    This class is responsible for:
+    - Creating and managing the Dear PyGui interface, including windows,
+      widgets for parameter input, model selection, protocol definition,
+      and plot displays.
+    - Initializing and switching between various ion channel models:
+        - `CTBNMarkovModel`
+        - `LegacyMarkovModel`
+        - `HHModel`
+        - `AnticonvulsantCTBNMarkovModel`
+        - `AnticonvulsantMarkovModel`
+    - Handling user interactions, such as model changes, parameter adjustments,
+      protocol modifications, and simulation requests.
+    - Orchestrating simulations by preparing parameters and protocols, then
+      launching them in a separate thread which utilizes a multiprocessing
+      pool (`worker.run_single_sweep`) for individual sweeps.
+    - Receiving simulation results and updating plots for current, voltage,
+      open probability, etc.
+    - Providing functionality to save plot data.
+
+    Key Attributes:
+    - `dpg`: The Dear PyGui context.
+    - Model instances (e.g., `self.ctbn_markov_model`, `self.legacy_hh_model`).
+    - `self.current_model`: The currently active simulation model.
+    - `self.current_model_name`: String name of the current model.
+    - `self.sim_results`: Stores results from simulations.
+    - Various DPG tags for GUI elements to manage their state and content.
+    """
     def __init__(self):
+        """
+        Initializes the IonChannelGUI application.
+
+        This constructor performs the following key setup actions:
+        1.  Creates the Dear PyGui context (`dpg.create_context()`).
+        2.  Initializes instances of all available ion channel models:
+            - `CTBNMarkovModel`
+            - `MarkovModel` (legacy)
+            - `HHModel` (legacy Hodgkin-Huxley)
+            - `AnticonvulsantMarkovModel` (legacy, with default drug 'DPH')
+            - `AnticonvulsantCTBNMarkovModel` (with default drug 'DPH')
+        3.  Sets the `CTBNMarkovModel` as the default `current_model`.
+        4.  Defines lists of parameter names and detailed information (descriptions,
+            bounds) for each model type (Markov, HH, Anticonvulsant Markov).
+        5.  Initializes attributes to store simulation results (`sim_results`) and
+            temporary data.
+        6.  Creates the main application viewport using `dpg.create_viewport()`.
+        7.  Sets up the Dear PyGui environment using `dpg.setup_dearpygui()`.
+        8.  Creates the primary window (`tag='primary_window'`) and calls
+            `self.setup_gui()` to populate it with UI elements.
+        9.  Shows the viewport and maximizes it (with a macOS-specific zoom).
+        """
         dpg.create_context()
         self.drug_types = ['CBZ', 'LTG', 'DPH']
         self.ctbn_markov_model = CTBNMarkovModel()
@@ -48,16 +120,76 @@ class IonChannelGUI():
         else:
             dpg.maximize_viewport()
     def set_drug_type(self, drug_type):
+        """
+        Sets the drug type for the GUI and re-initializes related parameters.
+
+        Note: This method appears to set a `drug_type` attribute on the GUI
+        instance itself and then calls `self.init_parameters()` and
+        `self.stRatesVolt()`. These latter methods are part of the model
+        classes. The primary mechanism for changing drug types for active
+        anticonvulsant models is via `on_drug_type_change`, which calls the
+        model's own `set_drug_type` method. This GUI-level method might be
+        intended for a different model interaction pattern or could be a
+        legacy component.
+
+        Args:
+            drug_type (str): The new drug type (e.g., 'CBZ', 'LTG', 'DPH').
+                             It will be converted to uppercase.
+        """
         self.drug_type = drug_type.upper()
         self.init_parameters()
         self.stRatesVolt()
     def on_drug_type_change(self, sender, app_data, user_data):
+        """
+        Callback for when the drug type is changed in the GUI.
+
+        This method is triggered by a UI element (e.g., a dropdown) for selecting
+        the drug type. If the `current_model` has a `set_drug_type` method
+        (i.e., it's an anticonvulsant model), this method calls it to update
+        the model's internal drug type. It then calls `self.setup_parameters()`
+        to refresh the parameter input fields in the GUI, which may change if
+        drug-specific parameters become relevant or default values change.
+
+        Args:
+            sender: The DPG item that triggered the callback.
+            app_data: The new drug type selected by the user (string).
+            user_data: Additional data passed from DPG (not used here).
+        """
         drug_type = app_data
         if hasattr(self.current_model, 'set_drug_type'):
             self.current_model.set_drug_type(drug_type)
             self.setup_parameters()
         print(f'Drug type changed to: {drug_type}')
     def save_plot_to_file(self, plot_type, plot_data):
+        """
+        Saves the specified plot data to an image file using a subprocess.
+
+        This method handles saving for "Current" and "Current Traces" plot types.
+        Other plot types are expected to be handled by different mechanisms (e.g.,
+        `save_comparison_plots`).
+
+        The saving process involves:
+        1.  If `plot_type` is "Current" and `plot_data` lacks time, current, or
+            voltage data, it attempts to populate these from the `current_model`'s
+            simulation results (`SimTime`, `SimCur`, `SimCom`).
+        2.  Serializes `plot_type` and `plot_data` into a temporary JSON file.
+        3.  Generates a temporary Python script (`save_plot.py`). This script:
+            a.  Loads the plot data from the JSON file.
+            b.  Uses `matplotlib` (with an 'Agg' backend) to generate the plot.
+            c.  Saves the plot as a PNG image to a subdirectory (`data/currents`)
+                within the project, naming it based on `plot_type` and model type.
+        4.  Executes the `save_plot.py` script using `subprocess.run()`.
+        5.  Cleans up the temporary directory and files.
+
+        This subprocess-based approach is likely used to prevent GUI freezes and
+        manage `matplotlib` backend compatibility.
+
+        Args:
+            plot_type (str): The type of plot to save (e.g., "Current",
+                             "Current Traces").
+            plot_data (dict): A dictionary containing the data required to
+                              reconstruct and save the plot.
+        """
         if ((plot_type != 'Current') and (plot_type != 'Current Traces')):
             print(f'Skipping auto-save for {plot_type} plot - should be saved via save_comparison_plots')
             return
@@ -117,6 +249,27 @@ class IonChannelGUI():
             import traceback
             traceback.print_exc()
     def setup_gui(self):
+        """
+        Sets up the main graphical user interface elements within the primary window.
+
+        This method constructs the layout and widgets for user interaction,
+        including:
+        -   A 'Model Selection' section with radio buttons to choose the active
+            ion channel model. Changing the selection triggers `self.on_model_change`.
+        -   A 'Model Parameters' collapsible header, which calls
+            `self.setup_parameters()` to populate its content based on the
+            currently selected model.
+        -   A 'Voltage Protocol' collapsible header, which calls
+            `self.setup_protocol_widgets()` to display controls for defining
+            voltage clamp protocols.
+        -   A 'Run Simulation' button that triggers `self.run_simulation`.
+        -   A dedicated 'Plots' window positioned to the right of the main controls.
+            This window contains a tab bar:
+            -   The 'Current Traces' tab displays two plots:
+                1.  'Command Voltage Protocol': Shows the voltage applied over time.
+                2.  'Current Responses': Shows the simulated ionic current over time.
+                Both plots are initialized with axes, labels, and legends.
+        """
         with dpg.collapsing_header(label='Model Selection', default_open=True):
             dpg.add_radio_button(('CTBN Markov', 'Legacy Markov', 'Hodgkin-Huxley', 'Anticonvulsant Legacy Markov', 'Anticonvulsant CTBN Markov'), default_value='CTBN Markov', callback=self.on_model_change, tag='model_selector')
         with dpg.collapsing_header(label='Model Parameters', default_open=True, tag='parameters_header'):
@@ -144,6 +297,35 @@ class IonChannelGUI():
                         dpg.set_axis_limits('current_plot_y_axis', (- 500), 50)
                         self.current_series = []
     def setup_parameters(self):
+        """
+        Dynamically sets up GUI widgets for model parameter input.
+
+        This method is called when the model selection changes or when the
+        parameter section needs to be refreshed. It first clears any existing
+        parameter input widgets within the 'param_group' (which is parented to
+        the 'parameters_header').
+
+        Then, based on the `self.current_model_name`, it populates the
+        'param_group' with appropriate input fields:
+
+        -   **For Markov-based models (CTBN, Legacy, Anticonvulsant):**
+            -   Input fields for gate parameters (e.g., 'alcoeff', 'alslp' for
+                alpha gate; similar for beta, gamma, delta gates).
+            -   Input fields for transition rate parameters (e.g., 'ConCoeff',
+                'OpOnCoeff').
+            -   An input field for 'Number of Channels'.
+        -   **Specifically for Anticonvulsant models:**
+            -   A combo box to select 'Drug Type' (CBZ, LTG, DPH).
+            -   An input field for 'Drug Conc. (µM)'.
+        -   **Specifically for Hodgkin-Huxley models (non-Markov):**
+            -   Input fields for HH parameters (e.g., 'g_Na', 'E_Na', 'C_m',
+                'numchan').
+
+        Each input widget is tagged (e.g., `f'param_input_{attr_name}'`) and
+        configured with a callback (`self.on_parameter_change` or
+        `self.on_drug_type_change`) that updates the corresponding attribute in
+        `self.current_model` when its value is changed by the user.
+        """
         if dpg.does_item_exist('param_group'):
             dpg.delete_item('param_group')
         with dpg.group(tag='param_group', parent='parameters_header'):
@@ -201,6 +383,31 @@ class IonChannelGUI():
                         else:
                             dpg.add_input_float(label=label_text, default_value=getattr(model, attr_name), callback=self.on_parameter_change, user_data=attr_name, tag=f'param_input_{attr_name}', width=param_width)
     def on_protocol_type_change(self, sender, app_data, user_data):
+        """
+        Callback for when the voltage protocol type is changed in the GUI.
+
+        This method is triggered by a UI element (e.g., a dropdown) for
+        selecting the voltage clamp protocol.
+
+        - If the selected `app_data` (protocol type) is 'Custom', it ensures
+          that the UI widgets for defining a custom protocol
+          (`custom_protocol_widgets`) are shown.
+        - If a predefined protocol type is selected (e.g., 'Default',
+          'Inactivation', 'Recovery', 'Steady-State Inactivation'):
+            - It calls the corresponding `create_<protocol_name>_protocol()`
+              method on the `self.current_model` to generate the protocol
+              parameters and update the model's internal `SwpSeq`.
+            - For 'Steady-State Inactivation', it checks if the model supports
+              this protocol before calling.
+            - After applying the protocol, it prints a confirmation message to
+              the console and calls `self.update_plots()` to refresh the
+              voltage and current plots in the GUI.
+
+        Args:
+            sender: The DPG item that triggered the callback.
+            app_data (str): The new protocol type selected by the user.
+            user_data: Additional data passed from DPG (not used here).
+        """
         protocol_type = app_data
         is_custom = (protocol_type == 'Custom')
         if dpg.does_item_exist('custom_protocol_widgets'):
@@ -240,6 +447,32 @@ class IonChannelGUI():
         except Exception as e:
             print(f'An error occurred in on_parameter_change for {param_key}: {e}')
     def setup_protocol_widgets(self):
+        """
+        Sets up the GUI widgets for defining voltage clamp protocols.
+
+        This method is responsible for creating the user interface elements
+        within the 'Voltage Protocol' collapsible header. It first clears any
+        pre-existing widgets in the 'voltage_protocol_group'.
+
+        The created widgets include:
+        -   A set of radio buttons ('protocol_type_radio') allowing the user to
+            select a protocol type: 'Default', 'Inactivation', 'Recovery',
+            'Steady-State Inactivation', or 'Custom'. Selecting a type triggers
+            the `self.on_protocol_type_change` callback.
+        -   A group of widgets for defining a 'Custom' protocol
+            (`custom_protocol_widgets`), initially hidden. This group contains:
+            -   Input fields for 'Holding Potential (mV)', 'Prepulse Duration (ms)',
+                'Pulse Duration (ms)', and 'Postpulse Duration (ms)'.
+            -   A section for defining a series of 'Voltage Steps':
+                -   Initially, one input field for 'Step 1' voltage.
+                -   Buttons to 'Add Voltage Step' (calls `self.add_voltage_step`)
+                    and 'Remove Last Step' (calls `self.remove_voltage_step`).
+            -   An 'Apply Custom Protocol' button (calls
+                `self.apply_voltage_protocol`).
+
+        The tags for dynamically added voltage step input fields are stored in
+        `self.voltage_step_tags`.
+        """
         self.voltage_step_tags = []
         if dpg.does_item_exist('voltage_protocol_group'):
             dpg.delete_item('voltage_protocol_group')
@@ -263,11 +496,34 @@ class IonChannelGUI():
     def on_protocol_change(self, sender, value):
         print("Custom protocol modified. Click 'Apply Custom Protocol' to update.")
     def add_voltage_step(self):
+        """
+        Adds a new voltage step input field to the custom protocol GUI.
+
+        This method is called when the 'Add Voltage Step' button is clicked.
+        It determines the next step number, creates a unique tag for the new
+        input field (e.g., 'voltage_step_1', 'voltage_step_2'), and adds a
+        new `dpg.add_input_int` widget to the 'voltage_steps_group'.
+        The new input field is labeled sequentially (e.g., 'Step 2', 'Step 3').
+        The tag of the newly added input field is appended to
+        `self.voltage_step_tags`. The `self.on_protocol_change` callback is
+        associated with this new input field.
+        """
         step_num = len(self.voltage_step_tags)
         tag = f'voltage_step_{step_num}'
         dpg.add_input_int(label=f'Step {(step_num + 1)}', default_value=0, width=150, callback=self.on_protocol_change, tag=tag, parent='voltage_steps_group')
         self.voltage_step_tags.append(tag)
     def remove_voltage_step(self):
+        """
+        Removes the last added voltage step input field from the custom protocol GUI.
+
+        This method is called when the 'Remove Last Step' button is clicked.
+        It checks if there is more than one voltage step currently defined.
+        If so, it removes the tag of the last step from `self.voltage_step_tags`
+        and deletes the corresponding `dpg.add_input_int` widget from the GUI.
+        If only one voltage step remains, it prints a message indicating that
+        the last step cannot be removed, ensuring at least one step is always
+        present for custom protocol definition.
+        """
         if (len(self.voltage_step_tags) > 1):
             tag_to_remove = self.voltage_step_tags.pop()
             if dpg.does_item_exist(tag_to_remove):
@@ -275,6 +531,27 @@ class IonChannelGUI():
         else:
             print('Cannot remove the last voltage step.')
     def apply_voltage_protocol(self):
+        """
+        Applies the custom voltage protocol defined in the GUI to the current model.
+
+        This method is called when the 'Apply Custom Protocol' button is clicked.
+        It performs the following actions:
+        1.  Retrieves values for 'holding_potential', 'prepulse_duration',
+            'pulse_duration', and 'postpulse_duration' from their respective
+            input fields in the GUI.
+        2.  Collects all voltage step values from the dynamically created
+            input fields (identified by tags in `self.voltage_step_tags`).
+        3.  Updates the corresponding attributes (`V_hold`, `prepulse_duration`,
+            `pulse_duration`, `postpulse_duration`, `voltages`) on the
+            `self.current_model`.
+        4.  Calls the `self.current_model.makeprotocol()` method, which uses
+            these updated attributes to generate the actual voltage command
+            sequence (`SwpSeq`) for the simulation.
+        5.  Prints a confirmation message to the console.
+        6.  Calls `self.update_plots()` to refresh the GUI plots to reflect
+            the newly applied protocol.
+        Includes basic error handling for issues during protocol application.
+        """
         try:
             holding_potential = dpg.get_value('holding_potential')
             prepulse_duration = dpg.get_value('prepulse_duration')
@@ -292,6 +569,33 @@ class IonChannelGUI():
         except Exception as e:
             print(f'Error applying custom protocol: {e}')
     def update_plots(self, rates_already_updated=False):
+        """
+        Refreshes all primary GUI plots with current data.
+
+        This method orchestrates the updating of the command voltage and
+        current response plots. It is typically called after simulation runs,
+        model changes, or protocol adjustments.
+
+        The process involves:
+        1.  Calling `self._clear_all_plots()` to remove existing plot data
+            and re-initialize the plot structures.
+        2.  Ensuring `self.current_series` and `self.voltage_series` (which
+            store plot line data) are cleared if they exist.
+        3.  Calling `self.update_voltage_plot()` to redraw the command voltage
+            protocol based on the current model's `SwpSeq`.
+        4.  Optionally, if `rates_already_updated` is False and the current
+            model has an `update_rates` method (common in CTBN models),
+            it calls this method to ensure rate constants are current before
+            plotting current responses.
+        5.  Calling `self.update_current_plot()` to redraw the simulated
+            current traces based on `self.sim_results`.
+
+        Args:
+            rates_already_updated (bool, optional): A flag to indicate if the
+                model's rate constants have already been updated. Defaults to False.
+                This can prevent redundant calculations if rates were updated
+                just before calling this method.
+        """
         self._clear_all_plots()
         if hasattr(self, 'current_series'):
             self.current_series = []
@@ -302,6 +606,31 @@ class IonChannelGUI():
             self.current_model.update_rates()
         self.update_current_plot()
     def update_voltage_plot(self):
+        """
+        Updates the 'Command Voltage Protocol' plot with data from simulation results.
+
+        This method iterates through the `self.sim_results` (which should
+        contain data for each simulated sweep, including the protocol used).
+        It extracts the voltage protocol parameters for each sweep and draws
+        them as a line series on the voltage plot.
+
+        Key steps for each sweep's protocol:
+        1.  Checks if `self.sim_results` exists and is populated, and if the
+            voltage plot's Y-axis exists in the GUI.
+        2.  Sorts simulation results by 'step_volt' in descending order to
+            potentially control plot layering or legend order.
+        3.  For each result, extracts protocol details: holding voltage/duration,
+            test voltage/duration, and tail voltage/duration.
+        4.  Constructs `time_points` and `voltage_points` arrays representing
+            the voltage steps over time for the current protocol.
+        5.  Ensures the plot extends to at least 300ms, padding with the
+            tail voltage if the protocol is shorter.
+        6.  Adds the generated line series to the 'voltage_plot_y_axis' in
+            the Dear PyGui plot, labeled with the step voltage (e.g., "0 mV").
+
+        If `sim_results` is empty or the necessary plot components are not found,
+        the method will exit early.
+        """
         if ((not hasattr(self, 'sim_results')) or (not self.sim_results)):
             return
         if (not dpg.does_item_exist('voltage_plot_y_axis')):
@@ -334,6 +663,30 @@ class IonChannelGUI():
             label = f'{int(step_volt)} mV'
             dpg.add_line_series(x=time_points, y=voltage_points, label=label, parent='voltage_plot_y_axis')
     def _clear_all_plots(self):
+        """
+        Clears and re-initializes all primary plots in the GUI.
+
+        This internal method is typically called before a new simulation run
+        or when a full reset of the plot views is required. It handles two
+        main plots:
+        1.  The 'Command Voltage Protocol' plot.
+        2.  The 'Current Responses' plot.
+
+        For each plot, the method attempts to:
+        -   Identify the plot by its predefined Dear PyGui tag (e.g.,
+            'command_voltage_plot', 'current_plot').
+        -   If the plot exists, delete it and its associated elements.
+        -   Recreate the plot with its standard label, dimensions, axes
+            (Time (ms) vs. Voltage (mV) or Current (pA)), and legend.
+        -   Set default axis limits.
+        -   Reset internal references to the plot's Y-axis and clear any
+            stored series data (e.g., `self.voltage_series`, `self.current_series`).
+
+        Error handling is included to manage scenarios where plots or their
+        parent containers might not exist, or if other Dear PyGui errors occur
+        during item deletion or creation. Messages are printed to the console
+        for warnings or errors encountered.
+        """
         voltage_plot_tag = 'command_voltage_plot'
         voltage_y_axis_tag = 'voltage_plot_y_axis'
         voltage_legend_tag = 'command_voltage_legend'
@@ -403,6 +756,41 @@ class IonChannelGUI():
                 except Exception as del_e:
                     print(f"Error during cleanup of '{current_plot_tag}': {del_e}")
     def update_current_plot(self):
+        """
+        Updates the 'Current Responses' plot with processed simulation data.
+
+        This method takes raw simulation results from `self.sim_results`,
+        applies several stages of signal processing to each current trace,
+        and then plots these processed traces.
+
+        Processing steps for each sweep's current trace include:
+        1.  Data Extraction: Retrieves time and current data.
+        2.  Smoothing: Applies a moving average filter if data is sufficient.
+        3.  Time Alignment: Shifts the time axis to align the current peak
+            (minimum value) to a predefined target time (98.0 ms).
+        4.  Time Padding: Extends the time trace to start at 0 ms and end at
+            300 ms, padding current values appropriately.
+        5.  Signal Clamping:
+            -   Sets current values before ~97 ms to the value at ~97 ms.
+            -   Sets current values after ~105 ms to the value at ~105 ms,
+                creating a flatline.
+        6.  Current Limiting: Caps positive current values at 0.25.
+        7.  The processed data for each sweep is temporarily stored in
+            `self.temp_scaled_data`.
+
+        Plotting steps:
+        -   Clears any existing line series from the 'current_plot_y_axis'.
+        -   Iterates through `self.temp_scaled_data`.
+        -   Adds each processed current trace as a line series to the plot,
+            labeled by its corresponding step voltage.
+        -   Calculates appropriate Y-axis limits based on the minimum and
+            maximum current values observed across all *original* (pre-clamping)
+            peaks, adding padding.
+        -   Applies the calculated limits to the plot's Y-axis.
+
+        If `sim_results` is empty or necessary GUI elements are missing,
+        the method handles these cases gracefully.
+        """
         self.current_series = []
         plot_data = {'time_points': [], 'currents': [], 'voltages': [], 'model_type': (str(self.current_model.__class__.__name__) if self.current_model else 'Unknown')}
         current_y_axis_tag = 'current_plot_y_axis'
@@ -534,6 +922,31 @@ class IonChannelGUI():
             if plot_data['time_points']:
                 self.save_plot_to_file('Current', plot_data)
     def run_simulation(self):
+        """
+        Initiates and manages the execution of an ion channel simulation.
+
+        This method is called when the 'Run Simulation' button is clicked.
+        It performs the following steps:
+        1.  Clears any previous simulation results (`self.sim_results`) and
+            clears all existing plots using `self._clear_all_plots()`.
+        2.  Synchronizes the `self.current_model`'s parameters with the values
+            currently displayed in the GUI input fields.
+        3.  Collects a comprehensive set of parameters from `self.current_model`,
+            including its type (e.g., Hodgkin-Huxley, CTBN Markov, Anticonvulsant)
+            and, if applicable, the selected `drug_type`.
+        4.  Extracts the voltage clamp protocol (`SwpSeq`) from `self.current_model`.
+            It handles two potential formats for `SwpSeq`:
+            -   A NumPy array (often found in legacy models), from which it decodes
+                each sweep's parameters (holding potential, durations, test voltage,
+                tail potential) into a list of dictionaries.
+            -   A list of dictionaries, which is used directly.
+        5.  If no valid voltage protocol is found, an error dialog is displayed.
+        6.  If a protocol is available, it launches the actual simulation logic
+            (`self.run_simulation_thread`) in a new `threading.Thread`. This
+            ensures the GUI remains responsive during potentially long simulations.
+            The collected parameters and the processed `swp_seq` are passed
+            as arguments to the simulation thread.
+        """
         self.sim_results = []
         self._clear_all_plots()
         for param_name in self.parameter_names:
@@ -578,6 +991,41 @@ class IonChannelGUI():
         simulation_thread = threading.Thread(target=self.run_simulation_thread, args=(parameters, swp_seq))
         simulation_thread.start()
     def run_simulation_thread(self, parameters, swp_seq):
+        """
+        Executes the simulation sweeps in a separate thread, possibly in parallel.
+
+        This method is designed to be run in a background thread to keep the GUI
+        responsive. It takes the model parameters and the sequence of voltage
+        clamp sweeps (`swp_seq`) as input.
+
+        The simulation process involves:
+        1.  Preparing arguments for each sweep. Each sweep is defined by its
+            index, the common model `parameters`, and its specific protocol
+            from `swp_seq`.
+        2.  Using `multiprocessing.Pool` to distribute the execution of
+            individual sweeps across multiple processes. The actual simulation
+            for a single sweep is handled by the `run_single_sweep` global
+            helper function (not a method of this class).
+        3.  Collecting results from all sweeps. It filters for successful
+            results (those that are not None and contain valid 'sim_swp' data).
+        4.  If successful results are obtained, they are sorted by sweep number
+            and stored in `self.sim_results`.
+        5.  `dpg.split_frame()` is called, likely to help Dear PyGui process
+            updates originating from this non-main thread.
+        6.  `self.update_plots()` is then called to refresh the GUI with the
+            new simulation data.
+        7.  If no sweeps are successful, an error dialog is shown.
+        8.  Includes comprehensive error handling, printing tracebacks to the
+            console and showing an error dialog for unexpected exceptions.
+        9.  A `finally` block ensures `gc.collect()` is called to perform
+            garbage collection.
+
+        Args:
+            parameters (dict): A dictionary of parameters for the current model,
+                               including model type and specific biophysical values.
+            swp_seq (list): A list of dictionaries, where each dictionary defines
+                            the voltage clamp protocol for a single sweep.
+        """
         try:
             num_swps = len(swp_seq)
             sweep_args = [(i, parameters, [swp_seq[i]]) for i in range(num_swps)]
@@ -597,6 +1045,19 @@ class IonChannelGUI():
         finally:
             gc.collect()
     def show_message_dialog(self, title, message):
+        """
+        Displays a modal message dialog to the user.
+
+        This method creates and shows a simple Dear PyGui modal window
+        containing a title and a message. The dialog includes an 'OK'
+        button that, when clicked, closes and deletes the dialog.
+
+        Args:
+            title (str): The title to be displayed in the dialog window's
+                         title bar.
+            message (str): The message content to be displayed within the
+                           dialog.
+        """
         with dpg.window(label=title, modal=True, no_close=False, width=400) as modal_id:
             dpg.add_text(message)
             dpg.add_button(label='OK', width=75, callback=(lambda : dpg.delete_item(modal_id)))
@@ -632,6 +1093,20 @@ class IonChannelGUI():
         self.setup_protocol_widgets()
         self.update_plots()
     def start(self):
+        """
+        Starts the Dear PyGui application event loop and displays the viewport.
+
+        This method should be called after the `IonChannelGUI` instance has
+        been initialized and its UI (`setup_gui`) has been configured.
+        It performs the final sequence to make the GUI visible and interactive:
+        1.  `dpg.show_viewport()`: Makes the main application window visible.
+        2.  `dpg.set_primary_window('primary_window', True)`: Designates the
+            main window of the application.
+        3.  `dpg.start_dearpygui()`: Starts the Dear PyGui event loop,
+            blocking execution until the GUI is closed.
+        4.  `dpg.destroy_context()`: Cleans up the Dear PyGui context after
+            the event loop terminates (i.e., when the application is closed).
+        """
         dpg.show_viewport()
         dpg.set_primary_window('primary_window', True)
         dpg.start_dearpygui()

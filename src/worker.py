@@ -1,9 +1,45 @@
+"""
+Defines the worker function for parallelized ion channel simulations.
+
+This module contains `run_single_sweep`, a function designed to be executed
+by individual processes in a multiprocessing pool. It handles the instantiation,
+parameterization, and execution of a single voltage clamp simulation sweep
+for various ion channel models (Hodgkin-Huxley, Markov, CTBN-based Markov,
+and their anticonvulsant-sensitive variants).
+"""
 import gc
 import numpy as np
 from ctbn_markov import CTBNMarkovModel, AnticonvulsantCTBNMarkovModel
 from legacy_markov import MarkovModel, AnticonvulsantMarkovModel
 from legacy_hh import HHModel
 def run_single_sweep(args):
+    """
+    Executes a single voltage clamp simulation sweep for a given model and protocol.
+
+    This function is designed to be called by a multiprocessing Pool, typically
+    from `IonChannelGUI.run_simulation_thread` in `main.py`. It handles the
+    instantiation, parameterization, and simulation of one specific sweep.
+
+    Args:
+        args (tuple): A tuple containing:
+            - sweep_no (int): The identifier/index of this sweep in a larger sequence.
+            - parameters (dict): A dictionary containing model parameters.
+                This includes flags like 'is_hh_model', 'use_ctbn',
+                'is_anticonvulsant_model', 'drug_type', 'drug_concentration',
+                as well as biophysical parameters for the model.
+            - swp_seq (list): A list containing a single dictionary that defines
+                the voltage clamp protocol for this specific sweep (e.g.,
+                holding/test/tail voltages and durations).
+
+    Returns:
+        dict: A dictionary containing the simulation results for the sweep:
+            - 'sweep_no' (int): The input sweep number.
+            - 'sim_swp' (np.ndarray): The simulated current trace. Empty if error.
+            - 'step_volt' (float): The main test voltage of the sweep. 0 if error.
+            - 'time' (np.ndarray): The time vector for the simulation. Empty if error.
+            - 'protocol' (dict): The input protocol dictionary for this sweep.
+            Returns a dictionary with empty arrays and default values upon error.
+    """
     (sweep_no, parameters, swp_seq) = args
     try:
         is_hh_model = parameters.get('is_hh_model', False)
